@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>인스타 10컷 웹툰 자동 조립기 (Mini Canva)</title>
-  <!-- 한글 웹툰용 폰트 및 아이콘, JSZip 라이브러리 로드 -->
+  <title>인스타 10컷 웹툰 자동 조립기 (사연툰 에디션)</title>
+  <!-- 웹툰/사연툰용 굵은 한글 폰트 및 JSZip 로드 -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Jua&family=Noto+Sans+KR:wght@400;600;700;900&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Jua&family=Noto+Sans+KR:wght@500;700;900&display=swap" rel="stylesheet">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -57,7 +57,7 @@
         <p class="helper-text">제미나이에서 생성한 JSON 대본을 붙여넣고 자동 생성 버튼을 누르세요.</p>
         <textarea id="jsonScriptInput" spellcheck="false" placeholder="여기에 제미나이 JSON 대본을 붙여넣으세요..."></textarea>
         <div class="btn-row">
-          <button id="btnLoadSample" class="btn btn-outline-sm">샘플 대본 넣기</button>
+          <button id="btnLoadSample" class="btn btn-outline-sm">사연툰 샘플 넣기</button>
           <button id="btnGenerateWebtoon" class="btn btn-primary-sm">⚡ 웹툰 자동 생성</button>
         </div>
       </div>
@@ -70,7 +70,6 @@
             <button id="btnDuplicateCut" class="btn btn-outline-sm" title="현재 선택된 컷 복제">복제</button>
           </div>
         </div>
-        <!-- 10컷 썸네일 리스트 -->
         <div id="cutThumbList" class="cut-thumb-list"></div>
       </div>
     </aside>
@@ -98,7 +97,7 @@
         <div class="canvas-wrapper">
           <canvas id="mainCanvas" width="1080" height="1350"></canvas>
         </div>
-        <p class="canvas-tip">💡 캔버스 위의 <strong>캐릭터, 말풍선, 스티커를 마우스로 드래그</strong>해 이동하고, <strong>모서리 파란색 점</strong>을 끌어 크기를 조절하세요.</p>
+        <p class="canvas-tip">💡 캔버스 위의 <strong>캐릭터, 말풍선, 효과음, 스티커를 마우스로 드래그</strong>해 이동하고, <strong>모서리 핸들</strong>을 끌어 크기를 조절하세요.</p>
       </div>
 
       <!-- 10컷 전체 그리드 뷰 -->
@@ -107,23 +106,55 @@
       </div>
     </section>
 
-    <!-- 3. 우측 패널: 미니 캔바 속성 편집기 -->
+    <!-- 3. 우측 패널: 사연툰 연출 & 미니 캔바 속성 편집기 -->
     <aside class="right-panel">
-      <!-- 컷 배경 및 요소 추가 -->
+      <!-- 컷 배경, 사연 자막 & 만화 분위기 연출 -->
       <div class="panel-section">
-        <h2>3. 현재 컷 배경 & 요소 추가</h2>
+        <h2>3. 배경 · 사연 자막 · 분위기 연출</h2>
         <div class="form-group">
           <label for="bgSelect">배경 이미지 (Background)</label>
           <select id="bgSelect"></select>
         </div>
+
+        <!-- 만화 분위기 연출 토글 (블러, 어두운 비네팅, 집중선) -->
         <div class="form-group">
-          <label for="cutHeaderInput">상단 고정 문구 (시리즈명/소제목)</label>
-          <input type="text" id="cutHeaderInput" placeholder="예: [SFTS 예방법 1탄] 야외활동 시 주의!">
+          <label>만화 연출 효과 (원클릭 적용)</label>
+          <div class="add-element-buttons">
+            <button id="btnToggleBlur" class="btn btn-outline-sm" title="배경 사진 흐림 처리">🌫️ 배경흐림</button>
+            <button id="btnToggleDark" class="btn btn-outline-sm" title="위기/불안 어두운 비네팅 효과">🌑 어둡게</button>
+            <button id="btnToggleSpeed" class="btn btn-outline-sm" title="충격/강조 집중선 효과">💥 집중선</button>
+          </div>
         </div>
+
+        <!-- 상단 & 하단 외곽선 사연 자막 -->
+        <div class="form-group">
+          <label for="cutHeaderInput">상단 사연 자막 (흰 글씨 + 검은 외곽선)</label>
+          <textarea id="cutHeaderInput" rows="2" placeholder="예: 처음엔 저도 긴가민가했고&#10;대수롭지 않게 넘겼어요"></textarea>
+        </div>
+        <div class="form-group">
+          <label for="cutFooterInput">하단 사연 자막 (흰 글씨 + 검은 외곽선)</label>
+          <textarea id="cutFooterInput" rows="2" placeholder="예: 그런데 바로 그때였어요..."></textarea>
+        </div>
+        <div class="form-row-2">
+          <div class="form-group">
+            <label for="captionStyleSelect">자막 테두리 스타일</label>
+            <select id="captionStyleSelect">
+              <option value="outline">사연툰 외곽선 자막 (추천)</option>
+              <option value="box">흰색 테두리 박스 자막</option>
+              <option value="bar">기존 상단 검은 바</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="captionSizeInput">자막 크기(px)</label>
+            <input type="number" id="captionSizeInput" min="28" max="90" step="2" value="46">
+          </div>
+        </div>
+
+        <!-- 요소 추가 버튼 -->
         <div class="add-element-buttons">
           <button id="btnAddChar" class="btn btn-outline-sm">+ 🐯 캐릭터</button>
           <button id="btnAddBubble" class="btn btn-outline-sm">+ 💬 말풍선</button>
-          <button id="btnAddSticker" class="btn btn-outline-sm">+ ✨ 스티커</button>
+          <button id="btnAddSticker" class="btn btn-outline-sm">+ 👥 스티커</button>
         </div>
       </div>
 
@@ -135,7 +166,7 @@
         </div>
 
         <div id="noSelectionMsg" class="empty-msg">
-          캔버스에서 수정할 <strong>캐릭터, 말풍선, 스티커</strong>를 마우스로 클릭하세요.
+          캔버스에서 수정할 <strong>캐릭터, 말풍선, 효과음, 스티커</strong>를 클릭하세요.
         </div>
 
         <!-- 공통 레이어 컨트롤 -->
@@ -148,7 +179,7 @@
           </div>
         </div>
 
-        <!-- 캐릭터 전용 컨트롤 (본체 + 의상 파츠 묶음) -->
+        <!-- 캐릭터 전용 컨트롤 -->
         <div id="charInspector" class="inspector-group hidden">
           <div class="form-group">
             <label for="charSelect">캐릭터 및 표정 (`characters/`)</label>
@@ -161,31 +192,32 @@
           <div class="form-group">
             <label for="outfitColorInput">의상 포인트 색상 (내장 캐릭터용)</label>
             <div class="color-picker-row">
-              <input type="color" id="outfitColorInput" value="#3b82f6">
+              <input type="color" id="outfitColorInput" value="#ef4444">
               <span class="helper-inline">클릭하여 옷 색상 변경</span>
             </div>
           </div>
         </div>
 
-        <!-- 말풍선 & 텍스트 전용 컨트롤 -->
+        <!-- 말풍선 & 효과음 텍스트 전용 컨트롤 -->
         <div id="bubbleInspector" class="inspector-group hidden">
           <div class="form-group">
-            <label for="speakerInput">화자 이름표 (비워두면 숨김)</label>
-            <input type="text" id="speakerInput" placeholder="예: 호랑이 연구원">
+            <label for="speakerInput">화자 이름표 (비워두면 사연툰처럼 깔끔하게 숨김)</label>
+            <input type="text" id="speakerInput" placeholder="비워두면 이름표 숨김">
           </div>
           <div class="form-group">
-            <label for="dialogueTextarea">대사 내용 (실시간 반영 / 엔터 줄바꿈)</label>
-            <textarea id="dialogueTextarea" rows="4" placeholder="대사를 입력하세요..."></textarea>
+            <label for="dialogueTextarea">대사 / 효과음 내용 (엔터 줄바꿈)</label>
+            <textarea id="dialogueTextarea" rows="3" placeholder="대사를 입력하세요..."></textarea>
           </div>
           <div class="form-row-2">
             <div class="form-group">
-              <label for="bubbleStyleSelect">말풍선 모양</label>
+              <label for="bubbleStyleSelect">말풍선 / 효과음 모양</label>
               <select id="bubbleStyleSelect">
                 <option value="round">둥근 말풍선 (기본)</option>
-                <option value="shout">외침/강조 말풍선</option>
-                <option value="thought">속마음 구름</option>
-                <option value="narration">내레이션/설명 박스</option>
-                <option value="title">1컷 표지 타이틀 배너</option>
+                <option value="thought">속마음 구름 (분홍/흰색)</option>
+                <option value="shout">외침 말풍선</option>
+                <option value="sfx">효과음 폭발 (꺄아!!/뿌와앙)</option>
+                <option value="plain">말풍선 없는 손글씨 (ㅋㅋㅋ)</option>
+                <option value="title">1컷 대형 타이틀 배너</option>
               </select>
             </div>
             <div class="form-group">
@@ -201,14 +233,14 @@
           <div class="form-row-3">
             <div class="form-group">
               <label for="fontSizeInput">글씨 크기(px)</label>
-              <input type="number" id="fontSizeInput" min="20" max="110" step="2" value="42">
+              <input type="number" id="fontSizeInput" min="22" max="130" step="2" value="44">
             </div>
             <div class="form-group">
               <label for="textColorInput">글씨 색상</label>
               <input type="color" id="textColorInput" value="#111827">
             </div>
             <div class="form-group">
-              <label for="bubbleBgColorInput">배경 색상</label>
+              <label for="bubbleBgColorInput">말풍선 색상</label>
               <input type="color" id="bubbleBgColorInput" value="#ffffff">
             </div>
           </div>
@@ -217,7 +249,7 @@
         <!-- 스티커 전용 컨트롤 -->
         <div id="stickerInspector" class="inspector-group hidden">
           <div class="form-group">
-            <label for="stickerSelect">스티커/효과 아이콘 (`stickers/`)</label>
+            <label for="stickerSelect">스티커/엑스트라 (`stickers/`)</label>
             <select id="stickerSelect"></select>
           </div>
         </div>
@@ -229,11 +261,11 @@
   <div id="promptModal" class="modal-backdrop hidden">
     <div class="modal-card">
       <div class="modal-header">
-        <h3>🤖 제미나이 대본 작가용 마스터 프롬프트</h3>
+        <h3>🤖 제미나이 대본 작가용 마스터 프롬프트 (사연툰 버전)</h3>
         <button id="btnClosePromptModal" class="btn-close">✕</button>
       </div>
       <div class="modal-body">
-        <p>아래 프롬프트를 복사하여 <strong>제미나이 채팅창</strong>에 감염병 지침 내용과 함께 붙여넣으세요. 현재 사용 가능한 캐릭터·의상·배경 파일명이 자동으로 반영되어 있습니다.</p>
+        <p>아래 프롬프트를 복사하여 <strong>제미나이 채팅창</strong>에 감염병 지침 내용과 함께 붙여넣으세요.</p>
         <textarea id="masterPromptText" readonly rows="16"></textarea>
       </div>
       <div class="modal-footer">
@@ -242,7 +274,7 @@
     </div>
   </div>
 
-  <!-- 로딩 오버레이 (ZIP 생성 시 표시) -->
+  <!-- 로딩 오버레이 -->
   <div id="loadingOverlay" class="loading-overlay hidden">
     <div class="spinner"></div>
     <p id="loadingText">고해상도 웹툰 이미지를 생성 중입니다...</p>
