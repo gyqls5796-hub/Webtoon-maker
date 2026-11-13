@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>인스타 10컷 웹툰 자동 조립기 (하이브리드 AI 작화 에디션)</title>
+  <title>인스타 10컷 웹툰 자동 제작기 (완전 자동화 최종판)</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=Jua&family=Noto+Sans+KR:wght@500;700;900&display=swap" rel="stylesheet">
@@ -26,12 +26,12 @@
       <input type="text" id="ghRepo" placeholder="저장소명 (Repo)" title="GitHub 저장소 이름">
       <input type="text" id="ghBranch" placeholder="main" value="main" class="branch-input" title="브랜치명">
       <button id="btnSyncGithub" class="btn btn-outline">폴더 동기화</button>
-      <label class="btn btn-accent-sm" style="cursor:pointer; padding:6px 10px; font-size:12px;" title="제미나이가 그려준 1~10컷 이미지를 한 번에 선택해 각 컷 배경으로 일괄 배치합니다">
+      <label class="btn btn-accent-sm" style="cursor:pointer; padding:6px 12px; font-size:12px;" title="제미나이가 그려준 1~10컷 이미지를 한 번에 선택해 현재 대본에 자동 매칭합니다">
         🖼️ AI 생성 컷 일괄 넣기
         <input type="file" id="batchSceneInput" accept="image/png,image/jpeg,image/webp" multiple hidden>
       </label>
-      <label class="btn btn-outline" style="cursor:pointer;" title="캐릭터/배경 개별 PNG 추가">
-        📁 개별 PNG
+      <label class="btn btn-outline" style="cursor:pointer;" title="현재 컷의 이미지만 교체하거나 개별 PNG 추가">
+        📁 개별 이미지 교체
         <input type="file" id="localAssetInput" accept="image/png,image/jpeg,image/webp" multiple hidden>
       </label>
     </div>
@@ -40,7 +40,7 @@
     <div class="export-bar">
       <div class="episode-input-group">
         <label for="episodeTitleInput">저장 파일명:</label>
-        <input type="text" id="episodeTitleInput" value="SFTS_예방법" placeholder="예: SFTS_예방법">
+        <input type="text" id="episodeTitleInput" value="새_에피소드" placeholder="예: 노로바이러스_예방법">
         <span class="ext-preview">.zip</span>
       </div>
       <button id="btnDownloadCurrent" class="btn btn-secondary">현재 컷 저장</button>
@@ -50,18 +50,19 @@
 
   <!-- 메인 워크스페이스 -->
   <main class="workspace">
-    <!-- 1. 좌측 패널: 대본 입력 및 컷 목록 -->
+    <!-- 1. 좌측 패널: 대본 입력 및 초기화 -->
     <aside class="left-panel">
       <div class="panel-section">
         <div class="section-header">
           <h2>1. 시나리오 대본(JSON) 입력</h2>
-          <button id="btnOpenPromptModal" class="btn btn-accent-sm">🤖 대본 프롬프트</button>
+          <button id="btnOpenPromptModal" class="btn btn-accent-sm">🤖 1단계: 대본 프롬프트</button>
         </div>
-        <p class="helper-text">대본을 넣고 생성한 뒤, 상단 <strong>[🎨 컷별 AI 작화 프롬프트]</strong>로 그림을 뽑으세요.</p>
-        <textarea id="jsonScriptInput" spellcheck="false" placeholder="여기에 제미나이 JSON 대본을 붙여넣으세요..."></textarea>
+        <p class="helper-text">새 대본을 넣고 <strong>[⚡ 새 대본 반영 (초기화)]</strong>를 누르면 이전 자막·말풍선이 모두 비워지고 새 대본으로 세팅됩니다.</p>
+        <textarea id="jsonScriptInput" spellcheck="false" placeholder="여기에 제미나이에서 생성한 새 감염병 JSON 대본을 붙여넣으세요..."></textarea>
         <div class="btn-row">
-          <button id="btnLoadSample" class="btn btn-outline-sm">샘플 대본</button>
-          <button id="btnGenerateWebtoon" class="btn btn-primary-sm">⚡ 대본 반영하기</button>
+          <button id="btnClearWorkspace" class="btn btn-danger-sm" title="모든 컷과 이미지를 백지 상태로 초기화">🧹 전체 초기화</button>
+          <button id="btnLoadSample" class="btn btn-outline-sm">샘플 보기</button>
+          <button id="btnGenerateWebtoon" class="btn btn-primary-sm">⚡ 새 대본 반영</button>
         </div>
       </div>
 
@@ -83,7 +84,7 @@
         <div class="view-tabs">
           <button id="tabSingleView" class="tab-btn active">🎨 컷 편집 및 자막 마감</button>
           <button id="tabGridView" class="tab-btn">🖼️ 10컷 전체 보기</button>
-          <button id="btnOpenArtPromptModal" class="btn btn-accent-sm" style="margin-left:8px;">✨ 컷별 AI 작화 프롬프트 뽑기</button>
+          <button id="btnOpenArtPromptModal" class="btn btn-accent-sm" style="margin-left:8px;">✨ 2단계: 컷별 AI 작화 프롬프트 뽑기</button>
         </div>
         <div class="cut-nav-controls">
           <button id="btnPrevCut" class="btn btn-outline-sm">◀ 이전</button>
@@ -99,7 +100,7 @@
         <div class="canvas-wrapper">
           <canvas id="mainCanvas" width="1080" height="1350"></canvas>
         </div>
-        <p class="canvas-tip">💡 제미나이가 그린 통짜 장면 위에 <strong>사연 자막, 말풍선, 효과음</strong>만 얹어 깔끔하게 마감하거나 기존 파츠를 조합할 수 있습니다.</p>
+        <p class="canvas-tip">💡 순서: <strong>① 대본 반영(초기화)</strong> → <strong>② 작화 프롬프트로 그림 10장 생성</strong> → <strong>③ [AI 생성 컷 일괄 넣기]</strong> 클릭 시 자동 조립 완료!</p>
       </div>
 
       <!-- 10컷 그리드 뷰 -->
@@ -113,7 +114,7 @@
       <div class="panel-section">
         <h2>3. 장면 이미지 · 사연 자막 · 연출</h2>
         <div class="form-group">
-          <label for="bgSelect">배경 / AI 통짜 장면 이미지</label>
+          <label for="bgSelect">현재 컷 장면 이미지</label>
           <select id="bgSelect"></select>
         </div>
 
@@ -128,11 +129,11 @@
 
         <div class="form-group">
           <label for="cutHeaderInput">상단 사연 자막 (흰 글씨 + 검은 외곽선)</label>
-          <textarea id="cutHeaderInput" rows="2" placeholder="예: 처음엔 저도 긴가민가했고&#10;대수롭지 않게 넘겼어요"></textarea>
+          <textarea id="cutHeaderInput" rows="2" placeholder="상단 자막 입력..."></textarea>
         </div>
         <div class="form-group">
           <label for="cutFooterInput">하단 사연 자막 (흰 글씨 + 검은 외곽선)</label>
-          <textarea id="cutFooterInput" rows="2" placeholder="예: 그런데 바로 그때였어요..."></textarea>
+          <textarea id="cutFooterInput" rows="2" placeholder="하단 자막 입력..."></textarea>
         </div>
         <div class="form-row-2">
           <div class="form-group">
@@ -151,8 +152,8 @@
 
         <div class="add-element-buttons">
           <button id="btnAddBubble" class="btn btn-outline-sm">+ 💬 말풍선</button>
-          <button id="btnAddChar" class="btn btn-outline-sm">+ 🐯 파츠캐릭터</button>
           <button id="btnAddSticker" class="btn btn-outline-sm">+ 👥 스티커</button>
+          <button id="btnClearCutBubbles" class="btn btn-danger-sm">말풍선 비우기</button>
         </div>
       </div>
 
@@ -164,7 +165,7 @@
         </div>
 
         <div id="noSelectionMsg" class="empty-msg">
-          캔버스에서 수정할 <strong>말풍선, 효과음, 캐릭터</strong>를 클릭하세요.
+          위치를 미세 조정할 <strong>말풍선, 효과음, 스티커</strong>를 캔버스에서 클릭하세요.
         </div>
 
         <div id="commonLayerControls" class="inspector-group hidden">
@@ -176,27 +177,10 @@
           </div>
         </div>
 
-        <div id="charInspector" class="inspector-group hidden">
-          <div class="form-group">
-            <label for="charSelect">캐릭터 파츠 (`characters/`)</label>
-            <select id="charSelect"></select>
-          </div>
-          <div class="form-group">
-            <label for="outfitSelect">의상 파츠 (`outfits/`)</label>
-            <select id="outfitSelect"></select>
-          </div>
-          <div class="form-group">
-            <label for="outfitColorInput">의상 포인트 색상</label>
-            <div class="color-picker-row">
-              <input type="color" id="outfitColorInput" value="#ef4444">
-            </div>
-          </div>
-        </div>
-
         <div id="bubbleInspector" class="inspector-group hidden">
           <div class="form-group">
-            <label for="speakerInput">화자 이름표 (비워두면 숨김)</label>
-            <input type="text" id="speakerInput" placeholder="비워두면 이름표 숨김">
+            <label for="speakerInput">화자 이름표 (비워두면 깔끔하게 숨김)</label>
+            <input type="text" id="speakerInput" placeholder="비워두면 숨김">
           </div>
           <div class="form-group">
             <label for="dialogueTextarea">대사 / 효과음 내용</label>
@@ -209,7 +193,7 @@
                 <option value="round">둥근 말풍선 (기본)</option>
                 <option value="thought">속마음 구름 (분홍/흰색)</option>
                 <option value="shout">외침 말풍선</option>
-                <option value="sfx">효과음 폭발 (꺄아!!/뿌와앙)</option>
+                <option value="sfx">효과음 폭발 (꺄아!!/스톱!!)</option>
                 <option value="plain">말풍선 없는 손글씨 (ㅋㅋㅋ)</option>
                 <option value="title">1컷 대형 타이틀 배너</option>
               </select>
@@ -227,7 +211,7 @@
           <div class="form-row-3">
             <div class="form-group">
               <label for="fontSizeInput">글씨 크기</label>
-              <input type="number" id="fontSizeInput" min="22" max="130" step="2" value="44">
+              <input type="number" id="fontSizeInput" min="22" max="130" step="2" value="42">
             </div>
             <div class="form-group">
               <label for="textColorInput">글씨 색상</label>
@@ -258,8 +242,8 @@
         <button id="btnClosePromptModal" class="btn-close">✕</button>
       </div>
       <div class="modal-body">
-        <p>제미나이 채팅창에 감염병 지침 내용과 함께 붙여넣으면, <strong>각 컷의 상황 묘사(scenePrompt)와 자막·대사</strong>가 포함된 JSON을 만들어 줍니다.</p>
-        <textarea id="masterPromptText" readonly rows="15"></textarea>
+        <p>제미나이 채팅창에 감염병 지침 내용과 함께 붙여넣으세요. <strong>인물 얼굴을 가리지 않는 상단 말풍선 좌표와 의상·소품 일관성</strong>이 반영된 JSON 대본을 만들어 줍니다.</p>
+        <textarea id="masterPromptText" readonly rows="16"></textarea>
       </div>
       <div class="modal-footer">
         <button id="btnCopyMasterPrompt" class="btn btn-primary">📋 대본 프롬프트 복사하기</button>
@@ -271,11 +255,11 @@
   <div id="artPromptModal" class="modal-backdrop hidden">
     <div class="modal-card" style="max-width:760px;">
       <div class="modal-header">
-        <h3>✨ 2단계: 컷별 AI 이미지 일괄 작화 프롬프트 (오리지널 동물 연구원 스타일)</h3>
+        <h3>✨ 2단계: 컷별 AI 이미지 일괄 작화 프롬프트 (의상·화풍 고정)</h3>
         <button id="btnCloseArtPromptModal" class="btn-close">✕</button>
       </div>
       <div class="modal-body">
-        <p>아래 컷별 지시문을 복사해 제미나이에게 순서대로 그려달라고 요청한 뒤, 받은 이미지 10장을 상단 <strong>[🖼️ AI 생성 컷 일괄 넣기]</strong>로 불러오세요. (특정 작가명을 배제한 안전한 오리지널 화풍입니다.)</p>
+        <p>복사 후 제미나이에게 순서대로 그림 10장을 생성받고, 파일명을 <strong>1.png ~ 10.png</strong>로 저장한 뒤 상단 <strong>[🖼️ AI 생성 컷 일괄 넣기]</strong>로 불러오세요.</p>
         <textarea id="artPromptText" readonly rows="17"></textarea>
       </div>
       <div class="modal-footer">
