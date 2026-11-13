@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>인스타 10컷 웹툰 자동 조립기 (Mini Canva)</title>
+  <!-- 한글 웹툰용 폰트 및 아이콘, JSZip 라이브러리 로드 -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Jua&family=Noto+Sans+KR:wght@400;600;700;900&display=swap" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- 상단 헤더: GitHub 연동 설정 및 맞춤 파일명 저장 바 -->
+  <header class="top-bar">
+    <div class="brand">
+      <span class="brand-badge">INSTATOON STUDIO</span>
+      <h1>10컷 웹툰 자동 조립기</h1>
+    </div>
+
+    <!-- GitHub 저장소 무코드 연동 설정 -->
+    <div class="github-config">
+      <span class="config-label">🔗 GitHub 에셋 연동:</span>
+      <input type="text" id="ghOwner" placeholder="사용자명 (Owner)" title="GitHub 아이디">
+      <span>/</span>
+      <input type="text" id="ghRepo" placeholder="저장소명 (Repo)" title="GitHub 저장소 이름">
+      <input type="text" id="ghBranch" placeholder="main" value="main" class="branch-input" title="브랜치명">
+      <button id="btnSyncGithub" class="btn btn-outline" title="GitHub 폴더에서 PNG 목록 불러오기">폴더 동기화</button>
+      <label class="btn btn-outline file-upload-label" title="GitHub에 올리기 전 내 PC의 PNG 이미지를 바로 불러와 테스트합니다">
+        📁 로컬 PNG 추가
+        <input type="file" id="localAssetInput" accept="image/png,image/jpeg,image/webp" multiple hidden>
+      </label>
+    </div>
+
+    <!-- 에피소드 파일명 지정 및 ZIP 다운로드 -->
+    <div class="export-bar">
+      <div class="episode-input-group">
+        <label for="episodeTitleInput">저장 파일명:</label>
+        <input type="text" id="episodeTitleInput" value="SFTS_예방법" placeholder="예: SFTS_예방법">
+        <span class="ext-preview">.zip</span>
+      </div>
+      <button id="btnDownloadCurrent" class="btn btn-secondary">현재 컷 저장</button>
+      <button id="btnDownloadZip" class="btn btn-primary">📦 전체 ZIP 일괄 저장</button>
+    </div>
+  </header>
+
+  <!-- 메인 워크스페이스 (3단 레이아웃) -->
+  <main class="workspace">
+    <!-- 1. 좌측 패널: 대본 입력 및 컷 목록 관리 -->
+    <aside class="left-panel">
+      <div class="panel-section">
+        <div class="section-header">
+          <h2>1. 대본(JSON) 일괄 입력</h2>
+          <button id="btnOpenPromptModal" class="btn btn-accent-sm">🤖 제미나이 프롬프트 복사</button>
+        </div>
+        <p class="helper-text">제미나이에서 생성한 JSON 대본을 붙여넣고 자동 생성 버튼을 누르세요.</p>
+        <textarea id="jsonScriptInput" spellcheck="false" placeholder="여기에 제미나이 JSON 대본을 붙여넣으세요..."></textarea>
+        <div class="btn-row">
+          <button id="btnLoadSample" class="btn btn-outline-sm">샘플 대본 넣기</button>
+          <button id="btnGenerateWebtoon" class="btn btn-primary-sm">⚡ 웹툰 자동 생성</button>
+        </div>
+      </div>
+
+      <div class="panel-section cut-list-section">
+        <div class="section-header">
+          <h2>2. 전체 컷 구성 (<span id="cutCountLabel">10</span>컷)</h2>
+          <div class="btn-group-mini">
+            <button id="btnAddCut" class="btn btn-outline-sm" title="새 컷 추가">+ 컷 추가</button>
+            <button id="btnDuplicateCut" class="btn btn-outline-sm" title="현재 선택된 컷 복제">복제</button>
+          </div>
+        </div>
+        <!-- 10컷 썸네일 리스트 -->
+        <div id="cutThumbList" class="cut-thumb-list"></div>
+      </div>
+    </aside>
+
+    <!-- 2. 중앙 패널: 메인 캔버스 편집기 & 10컷 전체 그리드 뷰 -->
+    <section class="center-stage">
+      <div class="stage-toolbar">
+        <div class="view-tabs">
+          <button id="tabSingleView" class="tab-btn active">🎨 정밀 편집 모드 (드래그/크기 조절)</button>
+          <button id="tabGridView" class="tab-btn">🖼️ 10컷 전체 한눈에 보기</button>
+        </div>
+        <div class="cut-nav-controls">
+          <button id="btnPrevCut" class="btn btn-outline-sm">◀ 이전 컷</button>
+          <span id="currentCutIndicator" class="cut-badge">1 / 10 컷</span>
+          <button id="btnNextCut" class="btn btn-outline-sm">다음 컷 ▶</button>
+          <span class="divider">|</span>
+          <button id="btnMoveCutLeft" class="btn btn-outline-sm" title="현재 컷 순서를 앞으로 이동">순서 ▲</button>
+          <button id="btnMoveCutRight" class="btn btn-outline-sm" title="현재 컷 순서를 뒤로 이동">순서 ▼</button>
+          <button id="btnDeleteCut" class="btn btn-danger-sm" title="현재 컷 삭제">컷 삭제</button>
+        </div>
+      </div>
+
+      <!-- 단일 컷 정밀 편집 뷰 -->
+      <div id="singleEditorView" class="editor-viewport">
+        <div class="canvas-wrapper">
+          <canvas id="mainCanvas" width="1080" height="1350"></canvas>
+        </div>
+        <p class="canvas-tip">💡 캔버스 위의 <strong>캐릭터, 말풍선, 스티커를 마우스로 드래그</strong>해 이동하고, <strong>모서리 파란색 점</strong>을 끌어 크기를 조절하세요.</p>
+      </div>
+
+      <!-- 10컷 전체 그리드 뷰 -->
+      <div id="gridEditorView" class="grid-viewport hidden">
+        <div id="fullGridContainer" class="full-grid-container"></div>
+      </div>
+    </section>
+
+    <!-- 3. 우측 패널: 미니 캔바 속성 편집기 -->
+    <aside class="right-panel">
+      <!-- 컷 배경 및 요소 추가 -->
+      <div class="panel-section">
+        <h2>3. 현재 컷 배경 & 요소 추가</h2>
+        <div class="form-group">
+          <label for="bgSelect">배경 이미지 (Background)</label>
+          <select id="bgSelect"></select>
+        </div>
+        <div class="form-group">
+          <label for="cutHeaderInput">상단 고정 문구 (시리즈명/소제목)</label>
+          <input type="text" id="cutHeaderInput" placeholder="예: [SFTS 예방법 1탄] 야외활동 시 주의!">
+        </div>
+        <div class="add-element-buttons">
+          <button id="btnAddChar" class="btn btn-outline-sm">+ 🐯 캐릭터</button>
+          <button id="btnAddBubble" class="btn btn-outline-sm">+ 💬 말풍선</button>
+          <button id="btnAddSticker" class="btn btn-outline-sm">+ ✨ 스티커</button>
+        </div>
+      </div>
+
+      <!-- 선택된 요소 정밀 수정 패널 -->
+      <div class="panel-section inspector-section">
+        <div class="section-header">
+          <h2>4. 선택 요소 상세 편집</h2>
+          <span id="selectedTypeBadge" class="type-badge">선택 없음</span>
+        </div>
+
+        <div id="noSelectionMsg" class="empty-msg">
+          캔버스에서 수정할 <strong>캐릭터, 말풍선, 스티커</strong>를 마우스로 클릭하세요.
+        </div>
+
+        <!-- 공통 레이어 컨트롤 -->
+        <div id="commonLayerControls" class="inspector-group hidden">
+          <div class="btn-row-4">
+            <button id="btnFlipX" class="btn btn-outline-sm" title="좌우 반전">↔ 좌우반전</button>
+            <button id="btnBringFront" class="btn btn-outline-sm" title="맨 앞으로 가져오기">▲ 맨앞으로</button>
+            <button id="btnSendBack" class="btn btn-outline-sm" title="맨 뒤로 보내기">▼ 맨뒤로</button>
+            <button id="btnDeleteLayer" class="btn btn-danger-sm" title="선택 요소 삭제">삭제</button>
+          </div>
+        </div>
+
+        <!-- 캐릭터 전용 컨트롤 (본체 + 의상 파츠 묶음) -->
+        <div id="charInspector" class="inspector-group hidden">
+          <div class="form-group">
+            <label for="charSelect">캐릭터 및 표정 (`characters/`)</label>
+            <select id="charSelect"></select>
+          </div>
+          <div class="form-group">
+            <label for="outfitSelect">착용 의상 파츠 (`outfits/`)</label>
+            <select id="outfitSelect"></select>
+          </div>
+          <div class="form-group">
+            <label for="outfitColorInput">의상 포인트 색상 (내장 캐릭터용)</label>
+            <div class="color-picker-row">
+              <input type="color" id="outfitColorInput" value="#3b82f6">
+              <span class="helper-inline">클릭하여 옷 색상 변경</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 말풍선 & 텍스트 전용 컨트롤 -->
+        <div id="bubbleInspector" class="inspector-group hidden">
+          <div class="form-group">
+            <label for="speakerInput">화자 이름표 (비워두면 숨김)</label>
+            <input type="text" id="speakerInput" placeholder="예: 호랑이 연구원">
+          </div>
+          <div class="form-group">
+            <label for="dialogueTextarea">대사 내용 (실시간 반영 / 엔터 줄바꿈)</label>
+            <textarea id="dialogueTextarea" rows="4" placeholder="대사를 입력하세요..."></textarea>
+          </div>
+          <div class="form-row-2">
+            <div class="form-group">
+              <label for="bubbleStyleSelect">말풍선 모양</label>
+              <select id="bubbleStyleSelect">
+                <option value="round">둥근 말풍선 (기본)</option>
+                <option value="shout">외침/강조 말풍선</option>
+                <option value="thought">속마음 구름</option>
+                <option value="narration">내레이션/설명 박스</option>
+                <option value="title">1컷 표지 타이틀 배너</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="bubbleTailSelect">꼬리 방향</label>
+              <select id="bubbleTailSelect">
+                <option value="left">↙ 좌측 하단</option>
+                <option value="right">↘ 우측 하단</option>
+                <option value="bottom">⬇ 중앙 하단</option>
+                <option value="none">꼬리 없음</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row-3">
+            <div class="form-group">
+              <label for="fontSizeInput">글씨 크기(px)</label>
+              <input type="number" id="fontSizeInput" min="20" max="110" step="2" value="42">
+            </div>
+            <div class="form-group">
+              <label for="textColorInput">글씨 색상</label>
+              <input type="color" id="textColorInput" value="#111827">
+            </div>
+            <div class="form-group">
+              <label for="bubbleBgColorInput">배경 색상</label>
+              <input type="color" id="bubbleBgColorInput" value="#ffffff">
+            </div>
+          </div>
+        </div>
+
+        <!-- 스티커 전용 컨트롤 -->
+        <div id="stickerInspector" class="inspector-group hidden">
+          <div class="form-group">
+            <label for="stickerSelect">스티커/효과 아이콘 (`stickers/`)</label>
+            <select id="stickerSelect"></select>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- 제미나이 대본 작가용 마스터 프롬프트 모달 -->
+  <div id="promptModal" class="modal-backdrop hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>🤖 제미나이 대본 작가용 마스터 프롬프트</h3>
+        <button id="btnClosePromptModal" class="btn-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <p>아래 프롬프트를 복사하여 <strong>제미나이 채팅창</strong>에 감염병 지침 내용과 함께 붙여넣으세요. 현재 사용 가능한 캐릭터·의상·배경 파일명이 자동으로 반영되어 있습니다.</p>
+        <textarea id="masterPromptText" readonly rows="16"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button id="btnCopyMasterPrompt" class="btn btn-primary">📋 프롬프트 전체 복사하기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 로딩 오버레이 (ZIP 생성 시 표시) -->
+  <div id="loadingOverlay" class="loading-overlay hidden">
+    <div class="spinner"></div>
+    <p id="loadingText">고해상도 웹툰 이미지를 생성 중입니다...</p>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
