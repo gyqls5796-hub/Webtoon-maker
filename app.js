@@ -1,38 +1,18 @@
 /**
- * 인스타그램 10컷 웹툰 자동 제작기 (하이브리드 AI 작화 + 사연툰 자막 마감 에디션)
- * - 1080 x 1350px 고해상도 캔버스
- * - AI가 통짜로 그린 10컷 장면 일괄 업로드 & 자동 배치
- * - 오리지널 굵은 펜선 동물 연구원 화풍 프롬프트 자동 생성기 탑재
- * - 기존 PNG 파츠 조립, 사연툰 상·하단 외곽선 자막, 비네팅·집중선 연출, 맞춤 파일명 ZIP 저장 지원
+ * 인스타그램 10컷 웹툰 자동 제작기 (완전 자동화 최종판)
+ * - 새 대본 입력 시 이전 자막·말풍선·이미지 완전 초기화 (Clean Reset)
+ * - 새 AI 생성 이미지 10장 일괄 업로드 시 현재 대본의 자막·말풍선만 정확히 매칭 및 잔여 레이어 제거
+ * - 인물 얼굴을 가리지 않는 상단 말풍선 표준 구도 + 대사 길이별 말풍선 크기 자동 보정
+ * - 의상 일관성 유지 및 오류 방지 AI 작화 프롬프트 자동 생성기
  */
 
 const CANVAS_W = 1080;
 const CANVAS_H = 1350;
 const HANDLE_SIZE = 24;
 
-// 기본 에셋 목록
 const DEFAULT_ASSETS = {
-  characters: [
-    { id: 'none', label: '캐릭터 파츠 사용 안 함 (AI 통짜 그림 사용)' },
-    { id: 'tiger_normal.png', label: '🐯 호랑이 (기본/일상)' },
-    { id: 'tiger_explain.png', label: '🐯 호랑이 (설명/지적)' },
-    { id: 'tiger_no.png', label: '🐯 호랑이 (단호/경고)' },
-    { id: 'tiger_good.png', label: '🐯 호랑이 (엄지척/칭찬)' },
-    { id: 'rabbit_normal.png', label: '🐰 토끼 (기본/일상)' },
-    { id: 'rabbit_shock.png', label: '🐰 토끼 (식은땀/당황)' },
-    { id: 'rabbit_sick.png', label: '🐰 토끼 (아픔/발열)' },
-    { id: 'rabbit_good.png', label: '🐰 토끼 (활짝웃음/해결)' },
-    { id: 'sheep_normal.png', label: '🐑 양 (기본/순둥)' },
-    { id: 'horse_normal.png', label: '🐴 말 (기본/활발)' },
-    { id: 'lion_explain.png', label: '🦁 사자 (박사/설명)' }
-  ],
-  outfits: [
-    { id: 'none', label: '의상 없음' },
-    { id: 'outfit_doctor.png', label: '🥼 연구원/의사 가운' },
-    { id: 'outfit_hiking.png', label: '🧥 야외/등산용 긴팔 조끼' },
-    { id: 'outfit_casual.png', label: '👕 일상 캐주얼 티셔츠' }
-  ],
   backgrounds: [
+    { id: 'bg_empty.png', label: '⬜ 빈 캔버스 (AI 생성 이미지 대기 중)' },
     { id: 'bg_forest.png', label: '🌲 풀숲/등산로 (기본 테마)' },
     { id: 'bg_hospital.png', label: '🏥 진료실/보건소 (기본 테마)' },
     { id: 'bg_home.png', label: '🏠 거실/일상 공간 (기본 테마)' },
@@ -49,10 +29,10 @@ const DEFAULT_ASSETS = {
   ]
 };
 
-const loadedImages = {};
+let loadedImages = {};
 
 let appState = {
-  episodeTitle: 'SFTS_예방법',
+  episodeTitle: '새_에피소드',
   currentCutIndex: 0,
   selectedLayerIndex: -1,
   viewMode: 'single',
@@ -71,29 +51,44 @@ const mainCanvas = document.getElementById('mainCanvas');
 const ctx = mainCanvas.getContext('2d');
 
 // ============================================================================
-// 1. 샘플 10컷 데이터 (scenePrompt: 제미나이 이미지 작화용 지시문 포함)
+// 1. 빈 워크스페이스 & 샘플 대본 데이터
 // ============================================================================
+function createEmpty10Cuts() {
+  return Array.from({ length: 10 }, (_, idx) => ({
+    background: 'bg_empty.png',
+    scenePrompt: `${idx + 1}번째 컷 장면을 입력하세요`,
+    blurBg: false,
+    darkMood: false,
+    speedLines: false,
+    captionStyle: 'outline',
+    captionSize: 46,
+    headerText: '',
+    footerText: '',
+    items: []
+  }));
+}
+
 function getSampleScriptData() {
   return {
     episodeTitle: "SFTS_예방법",
     cuts: [
       {
         background: "bg_forest.png",
-        scenePrompt: "반팔과 반바지를 입고 해맑게 등산하는 귀여운 토끼 캐릭터와, 옆에서 흰색 연구원 가운을 입고 팔로 X자를 그리며 다급하게 말리는 듬직한 호랑이 연구원 캐릭터, 배경은 흐릿한 숲속 등산로",
-        blurBg: true,
+        scenePrompt: "반팔과 반바지를 입고 해맑게 등산하는 귀여운 토끼 시민과, 옆에서 흰색 연구원 가운과 파란 넥타이를 매고 팔로 X자를 그리며 다급하게 말리는 듬직한 호랑이 연구원, 화면 하단 중앙에 나란히 배치",
+        blurBg: false,
         darkMood: false,
         speedLines: false,
         captionStyle: "outline",
-        captionSize: 52,
+        captionSize: 50,
         headerText: "등산 갈 때 반팔·반바지?\n진드기가 제일 좋아하는 맛집입니다",
         footerText: "SFTS(중증열성혈소판감소증후군) 완벽 예방법 편",
         items: [
-          { type: "bubble", bubbleStyle: "sfx", tailDir: "none", speaker: "", text: "잠깐 스톱!!", fontSize: 52, textColor: "#111827", bgColor: "#fde047", x: 340, y: 230, width: 400, height: 180 }
+          { type: "bubble", bubbleStyle: "sfx", tailDir: "none", speaker: "", text: "잠깐 스톱!!", fontSize: 50, textColor: "#111827", bgColor: "#fde047", x: 340, y: 185, width: 400, height: 165 }
         ]
       },
       {
         background: "bg_home.png",
-        scenePrompt: "주말 아침 거실에서 반팔 티셔츠를 입고 신나서 양팔을 번쩍 들고 있는 토끼 캐릭터와 옆에서 웃고 있는 양 캐릭터, 밝고 경쾌한 분위기",
+        scenePrompt: "주말 아침 거실에서 반팔 티셔츠를 입고 신나서 양팔을 들고 있는 토끼 시민과 옆에서 웃고 있는 양 친구 캐릭터, 화면 하단부에 배치",
         blurBg: false,
         darkMood: false,
         speedLines: false,
@@ -102,13 +97,13 @@ function getSampleScriptData() {
         headerText: "지난 주말, 친구와 함께\n뒷산에 놀러 갔던 날이었어요",
         footerText: "",
         items: [
-          { type: "bubble", bubbleStyle: "round", tailDir: "left", speaker: "", text: "날씨도 선선한데\n시원하게 반팔 입고 가자!", fontSize: 42, textColor: "#111827", bgColor: "#ffffff", x: 110, y: 220, width: 520, height: 220 }
+          { type: "bubble", bubbleStyle: "round", tailDir: "left", speaker: "", text: "날씨도 선선한데\n시원하게 반팔 입고 가자!", fontSize: 40, textColor: "#111827", bgColor: "#ffffff", x: 90, y: 185, width: 520, height: 195 }
         ]
       },
       {
         background: "bg_forest.png",
-        scenePrompt: "풀밭에 돗자리 없이 맨다리로 털썩 주저앉아 땀을 닦으며 웃는 토끼 캐릭터, 뒤쪽 풀숲에는 어두운 회색 실루엣의 작은 진드기들이 숨어 노려보는 코믹하고 긴장감 있는 구도",
-        blurBg: true,
+        scenePrompt: "풀밭에 돗자리 없이 맨다리로 털썩 주저앉아 웃는 토끼 시민, 뒤쪽 풀숲에는 작은 진드기 실루엣이 숨어 있는 긴장감 있는 구도",
+        blurBg: false,
         darkMood: false,
         speedLines: true,
         captionStyle: "outline",
@@ -116,12 +111,12 @@ function getSampleScriptData() {
         headerText: "한창 신나게 산을 오르다가\n풀밭에 털썩 주저앉았는데요",
         footerText: "풀숲에는 작은소피참진드기가 숨어 있었어요",
         items: [
-          { type: "bubble", bubbleStyle: "sfx", tailDir: "none", speaker: "", text: "하하하!\n여기 시원하다!!", fontSize: 44, textColor: "#111827", bgColor: "#fef08a", x: 120, y: 220, width: 430, height: 210 }
+          { type: "bubble", bubbleStyle: "sfx", tailDir: "none", speaker: "", text: "하하하! 시원하다!!", fontSize: 42, textColor: "#111827", bgColor: "#fef08a", x: 110, y: 185, width: 440, height: 165 }
         ]
       },
       {
         background: "bg_dark_mood.png",
-        scenePrompt: "얼굴에 식은땀을 흘리며 당황한 표정으로 자신의 종아리를 내려다보는 토끼 캐릭터 클로즈업, 화면 주변부가 어둡고 스산한 분위기",
+        scenePrompt: "얼굴에 식은땀을 흘리며 당황한 표정으로 자신의 종아리를 내려다보는 토끼 시민, 어둡고 스산한 분위기",
         blurBg: false,
         darkMood: true,
         speedLines: false,
@@ -130,12 +125,12 @@ function getSampleScriptData() {
         headerText: "처음엔 저도 긴가민가했고",
         footerText: "그래서 처음엔 대수롭지 않게 넘겼어요",
         items: [
-          { type: "bubble", bubbleStyle: "thought", tailDir: "left", speaker: "", text: "어..? 다리가 살짝\n따끔한 것 같은데?\n풀에 스친 거겠지?", fontSize: 40, textColor: "#111827", bgColor: "#fda4af", x: 110, y: 200, width: 540, height: 250 }
+          { type: "bubble", bubbleStyle: "thought", tailDir: "left", speaker: "", text: "어..? 다리가 살짝 따끔한데?\n풀에 스친 거겠지?", fontSize: 38, textColor: "#111827", bgColor: "#fda4af", x: 90, y: 175, width: 540, height: 205 }
         ]
       },
       {
         background: "bg_office.png",
-        scenePrompt: "흰색 연구원 가운을 입은 호랑이 연구원이 화면 정면을 향해 한 손가락을 치켜세우며 진지하고 단호하게 경고하는 상반신 클로즈업, 배경에 만화 집중선 효과",
+        scenePrompt: "흰색 연구원 가운을 입은 호랑이 연구원이 화면 정면을 향해 한 손가락을 치켜세우며 진지하게 경고하는 상반신 모습",
         blurBg: false,
         darkMood: false,
         speedLines: true,
@@ -144,13 +139,13 @@ function getSampleScriptData() {
         headerText: "그때! 감염병 파트의\n호랑이 연구원이 외쳤어요",
         footerText: "진드기 매개 감염병 SFTS는 치명률이 높습니다!",
         items: [
-          { type: "bubble", bubbleStyle: "shout", tailDir: "bottom", speaker: "", text: "맨살 노출은 절대 금물!!\n이렇게 입으셔야 안전합니다!", fontSize: 44, textColor: "#991b1b", bgColor: "#fef2f2", x: 130, y: 210, width: 820, height: 230 }
+          { type: "bubble", bubbleStyle: "shout", tailDir: "bottom", speaker: "", text: "맨살 노출은 절대 금물!!\n이렇게 입으셔야 안전합니다!", fontSize: 42, textColor: "#991b1b", bgColor: "#fef2f2", x: 130, y: 180, width: 820, height: 205 }
         ]
       },
       {
         background: "bg_forest.png",
-        scenePrompt: "긴팔 등산복과 긴바지, 모자, 목수건까지 빈틈없이 단단히 여며 입은 토끼 캐릭터가 뿌듯하게 서 있고 옆에서 호랑이 연구원이 고개를 끄덕이는 장면",
-        blurBg: true,
+        scenePrompt: "긴팔 등산복과 긴바지, 모자까지 빈틈없이 단단히 여며 입은 토끼 시민(오른쪽)과 이를 보며 설명하는 흰 가운의 호랑이 연구원(왼쪽)",
+        blurBg: false,
         darkMood: false,
         speedLines: false,
         captionStyle: "outline",
@@ -158,27 +153,27 @@ function getSampleScriptData() {
         headerText: "예방 수칙 ① 피부 노출 최소화하기",
         footerText: "소매와 바지 끝단을 단단히 여며주세요",
         items: [
-          { type: "bubble", bubbleStyle: "round", tailDir: "left", speaker: "", text: "야외활동 할 땐 무조건\n'긴팔·긴바지·모자' 필수!", fontSize: 42, textColor: "#111827", bgColor: "#ffffff", x: 120, y: 220, width: 840, height: 220 }
+          { type: "bubble", bubbleStyle: "round", tailDir: "left", speaker: "", text: "야외활동 할 땐 무조건\n'긴팔·긴바지·모자' 필수!", fontSize: 40, textColor: "#111827", bgColor: "#ffffff", x: 110, y: 180, width: 840, height: 195 }
         ]
       },
       {
         background: "bg_forest.png",
-        scenePrompt: "밝은 흰색과 연노랑색 계열의 등산복을 입은 토끼 캐릭터가 옷 소매에 붙은 검은 점을 발견하고 손가락으로 가리키며 엄지척하는 모습",
-        blurBg: true,
+        scenePrompt: "밝은 흰색과 연노랑색 계열의 긴팔 등산복과 긴바지를 입은 토끼 시민이 옷 소매를 가리키며 환하게 웃는 모습",
+        blurBg: false,
         darkMood: false,
         speedLines: false,
         captionStyle: "outline",
         captionSize: 46,
-        headerText: "예방 수칙 ② 밝은 색 옷 입기",
+        headerText: "예방 수칙 ② 밝은 색 긴옷 입기",
         footerText: "어두운 옷은 진드기가 붙어도 티가 안 나요!",
         items: [
-          { type: "bubble", bubbleStyle: "round", tailDir: "bottom", speaker: "", text: "밝은색 옷을 입어야 작은 진드기가\n붙었을 때 바로 발견해 털어낼 수 있어요!", fontSize: 42, textColor: "#111827", bgColor: "#ffffff", x: 100, y: 210, width: 880, height: 230 }
+          { type: "bubble", bubbleStyle: "round", tailDir: "bottom", speaker: "", text: "밝은색 옷을 입어야 작은 진드기가\n붙었을 때 바로 발견해 털어낼 수 있어요!", fontSize: 40, textColor: "#111827", bgColor: "#ffffff", x: 100, y: 180, width: 880, height: 200 }
         ]
       },
       {
         background: "bg_forest.png",
-        scenePrompt: "풀밭 위에 깔끔한 돗자리를 펴고 앉아 진드기 기피제 스프레이를 옷과 신발에 칙칙 뿌리는 토끼 캐릭터와 이를 흐뭇하게 바라보는 호랑이 연구원",
-        blurBg: true,
+        scenePrompt: "풀밭 위에 체크무늬 돗자리를 펴고 앉아 진드기 기피제를 긴팔 옷과 신발에 뿌리는 토끼 시민(왼쪽)과 엄지척하는 호랑이 연구원(오른쪽)",
+        blurBg: false,
         darkMood: false,
         speedLines: false,
         captionStyle: "outline",
@@ -186,12 +181,12 @@ function getSampleScriptData() {
         headerText: "예방 수칙 ③ 돗자리 & 기피제 사용",
         footerText: "풀밭 위에 옷을 벗어두거나 그냥 눕지 마세요",
         items: [
-          { type: "bubble", bubbleStyle: "round", tailDir: "right", speaker: "", text: "쉴 땐 반드시 돗자리를 펴고,\n진드기 기피제를 꼼꼼히 뿌려주세요!", fontSize: 42, textColor: "#111827", bgColor: "#ffffff", x: 100, y: 210, width: 880, height: 230 }
+          { type: "bubble", bubbleStyle: "round", tailDir: "right", speaker: "", text: "쉴 땐 반드시 돗자리를 펴고,\n진드기 기피제를 꼼꼼히 뿌려주세요!", fontSize: 40, textColor: "#111827", bgColor: "#ffffff", x: 100, y: 180, width: 880, height: 200 }
         ]
       },
       {
         background: "bg_bathroom.png",
-        scenePrompt: "집에 돌아와 입었던 등산복을 세탁기에 넣고, 수건을 두른 채 비누 거품을 내며 개운하게 웃고 있는 토끼 캐릭터, 배경은 타일 욕실",
+        scenePrompt: "집 욕실에서 거품으로 개운하게 샤워하며 활짝 웃고 있는 토끼 시민, 깨끗하고 밝은 타일 욕실 배경",
         blurBg: false,
         darkMood: false,
         speedLines: false,
@@ -200,12 +195,12 @@ function getSampleScriptData() {
         headerText: "예방 수칙 ④ 귀가 후 즉시 세탁 & 샤워",
         footerText: "귀 뒤, 무릎 뒤, 겨드랑이 등 물린 곳 확인!",
         items: [
-          { type: "bubble", bubbleStyle: "round", tailDir: "bottom", speaker: "", text: "집에 오자마자 옷은 털어서 바로 세탁하고\n비누로 꼼꼼히 샤워하며 몸을 확인해요!", fontSize: 42, textColor: "#111827", bgColor: "#ffffff", x: 90, y: 210, width: 900, height: 230 }
+          { type: "bubble", bubbleStyle: "round", tailDir: "bottom", speaker: "", text: "집에 오자마자 옷은 털어서 바로 세탁하고\n비누로 꼼꼼히 샤워하며 몸을 확인해요!", fontSize: 40, textColor: "#111827", bgColor: "#ffffff", x: 90, y: 180, width: 900, height: 200 }
         ]
       },
       {
         background: "bg_hospital.png",
-        scenePrompt: "보건소 진료실 앞에서 흰 가운을 입은 호랑이 연구원과 긴팔 등산복을 입은 토끼 캐릭터가 나란히 서서 양손 엄지척을 하며 환하게 인사하는 엔딩 장면",
+        scenePrompt: "보건소 진료실 앞에서 흰 가운을 입은 호랑이 연구원과 긴팔 등산복을 입은 토끼 시민이 나란히 서서 엄지척하며 인사하는 엔딩 장면",
         blurBg: false,
         darkMood: false,
         speedLines: false,
@@ -214,7 +209,7 @@ function getSampleScriptData() {
         headerText: "오늘의 SFTS 야외활동 예방 4계명 요약",
         footerText: "다음 편(5탄): 진드기에 물렸을 때 올바른 대처법!",
         items: [
-          { type: "bubble", bubbleStyle: "round", tailDir: "none", speaker: "", text: "1. 긴팔·긴바지·밝은색 옷 입기\n2. 돗자리 사용 & 진드기 기피제 뿌리기\n3. 귀가 후 즉시 세탁 & 샤워하며 확인!", fontSize: 40, textColor: "#1e3a8a", bgColor: "#eff6ff", x: 90, y: 200, width: 900, height: 260 }
+          { type: "bubble", bubbleStyle: "round", tailDir: "none", speaker: "", text: "1. 밝은색 긴팔·긴바지 입기\n2. 돗자리 사용 & 진드기 기피제 뿌리기\n3. 귀가 후 즉시 세탁 & 샤워하며 확인!", fontSize: 38, textColor: "#1e3a8a", bgColor: "#eff6ff", x: 90, y: 175, width: 900, height: 225 }
         ]
       }
     ]
@@ -222,7 +217,7 @@ function getSampleScriptData() {
 }
 
 // ============================================================================
-// 2. 초기화 및 이벤트 바인딩
+// 2. 초기화 및 UI 바인딩
 // ============================================================================
 window.addEventListener('DOMContentLoaded', () => {
   loadSavedGithubSettings();
@@ -230,7 +225,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
   const sampleData = getSampleScriptData();
   document.getElementById('jsonScriptInput').value = JSON.stringify(sampleData, null, 2);
-  applyScriptToState(sampleData);
+  applyScriptToState(sampleData, true);
 
   bindUIEvents();
   bindCanvasMouseEvents();
@@ -238,13 +233,12 @@ window.addEventListener('DOMContentLoaded', () => {
 
 function populateSelectMenus() {
   fillSelect('bgSelect', DEFAULT_ASSETS.backgrounds);
-  fillSelect('charSelect', DEFAULT_ASSETS.characters);
-  fillSelect('outfitSelect', DEFAULT_ASSETS.outfits);
   fillSelect('stickerSelect', DEFAULT_ASSETS.stickers);
 }
 
 function fillSelect(selectId, items) {
   const select = document.getElementById(selectId);
+  if (!select) return;
   const prevVal = select.value;
   select.innerHTML = '';
   items.forEach(item => {
@@ -253,14 +247,9 @@ function fillSelect(selectId, items) {
     opt.textContent = item.label || item.id;
     select.appendChild(opt);
   });
-  if (prevVal && items.some(i => i.id === prevVal)) {
-    select.value = prevVal;
-  }
+  if (prevVal && items.some(i => i.id === prevVal)) select.value = prevVal;
 }
 
-// ============================================================================
-// 3. GitHub 동기화 & AI 생성 10컷 일괄 불러오기
-// ============================================================================
 function loadSavedGithubSettings() {
   const savedOwner = localStorage.getItem('webtoon_gh_owner') || '';
   const savedRepo = localStorage.getItem('webtoon_gh_repo') || '';
@@ -268,24 +257,16 @@ function loadSavedGithubSettings() {
   document.getElementById('ghOwner').value = savedOwner;
   document.getElementById('ghRepo').value = savedRepo;
   document.getElementById('ghBranch').value = savedBranch;
-
-  if (savedOwner && savedRepo) {
-    syncGithubAssets(savedOwner, savedRepo, savedBranch, true);
-  }
+  if (savedOwner && savedRepo) syncGithubAssets(savedOwner, savedRepo, savedBranch, true);
 }
 
 async function syncGithubAssets(owner, repo, branch = 'main', silent = false) {
-  if (!owner || !repo) {
-    if (!silent) alert('GitHub 사용자명(Owner)과 저장소명(Repo)을 입력해 주세요.');
-    return;
-  }
+  if (!owner || !repo) return;
   localStorage.setItem('webtoon_gh_owner', owner);
   localStorage.setItem('webtoon_gh_repo', repo);
   localStorage.setItem('webtoon_gh_branch', branch);
 
-  const categories = ['characters', 'outfits', 'backgrounds', 'stickers'];
-  let foundCount = 0;
-
+  const categories = ['backgrounds', 'stickers'];
   for (const category of categories) {
     const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/images/${category}?ref=${branch}`;
     try {
@@ -293,101 +274,181 @@ async function syncGithubAssets(owner, repo, branch = 'main', silent = false) {
       if (!res.ok) continue;
       const files = await res.json();
       if (!Array.isArray(files)) continue;
-
       files.forEach(file => {
         if (file.type === 'file' && /\.(png|jpg|jpeg|webp|svg)$/i.test(file.name)) {
-          foundCount++;
           if (!DEFAULT_ASSETS[category].some(item => item.id === file.name)) {
-            DEFAULT_ASSETS[category].push({
-              id: file.name,
-              label: `📁 ${file.name}`
-            });
+            DEFAULT_ASSETS[category].push({ id: file.name, label: `📁 ${file.name}` });
           }
           preloadExternalImage(file.name, file.download_url);
         }
       });
-    } catch (err) {
-      console.warn(`GitHub 폴더 조회 실패 (${category}):`, err);
-    }
+    } catch (err) { console.warn(err); }
   }
-
   populateSelectMenus();
   renderAll();
-  if (!silent) {
-    alert(`GitHub 연동 완료! 총 ${foundCount}개의 이미지 에셋을 확인했습니다.`);
-  }
 }
 
 function preloadExternalImage(fileName, url) {
   const img = new Image();
   img.crossOrigin = 'anonymous';
-  img.onload = () => {
-    loadedImages[fileName] = img;
-    renderAll();
-  };
+  img.onload = () => { loadedImages[fileName] = img; renderAll(); };
   img.src = url;
 }
 
-// 제미나이가 생성한 1~10컷 통짜 이미지를 한 번에 선택해 각 컷 배경에 자동 할당
+// ============================================================================
+// 3. 핵심: 새 대본 반영(완전 초기화) & 새 AI 생성 이미지 10장 일괄 매칭
+// ============================================================================
+function applyScriptToState(scriptObj, isInitial = false) {
+  if (!scriptObj || !Array.isArray(scriptObj.cuts) || scriptObj.cuts.length === 0) {
+    alert('대본 JSON 안에 유효한 cuts 배열이 없습니다.');
+    return;
+  }
+
+  // 1) 이전 에피소드의 AI 장면 이미지 캐시와 배경 드롭다운 찌꺼기를 깨끗하게 비움
+  if (!isInitial) {
+    Object.keys(loadedImages).forEach(key => {
+      if (key.startsWith('ai_scene_')) delete loadedImages[key];
+    });
+    DEFAULT_ASSETS.backgrounds = DEFAULT_ASSETS.backgrounds.filter(b => !b.id.startsWith('ai_scene_'));
+  }
+
+  // 2) 에피소드 제목 자동 연동
+  if (scriptObj.episodeTitle) {
+    appState.episodeTitle = scriptObj.episodeTitle;
+    document.getElementById('episodeTitleInput').value = scriptObj.episodeTitle;
+  }
+
+  // 3) 새 대본의 컷 데이터로 완전히 교체 (옛날 파츠 캐릭터/찌꺼기 제거 및 말풍선 안전 좌표 정규화)
+  appState.cuts = scriptObj.cuts.map((rawCut, idx) => {
+    const cleanItems = (rawCut.items || [])
+      .filter(it => (it.type || '').toLowerCase() !== 'character') // 통짜 그림과 겹치는 더미 캐릭터 차단
+      .map(it => {
+        if ((it.type || '').toLowerCase() === 'bubble') {
+          return normalizeBubbleLayout(it);
+        }
+        return { ...it };
+      });
+
+    return {
+      background: rawCut.background || 'bg_empty.png',
+      scenePrompt: rawCut.scenePrompt || '',
+      blurBg: Boolean(rawCut.blurBg),
+      darkMood: Boolean(rawCut.darkMood),
+      speedLines: Boolean(rawCut.speedLines),
+      captionStyle: rawCut.captionStyle || 'outline',
+      captionSize: Number(rawCut.captionSize) || 46,
+      headerText: rawCut.headerText || '',
+      footerText: rawCut.footerText || '',
+      items: cleanItems
+    };
+  });
+
+  appState.currentCutIndex = 0;
+  appState.selectedLayerIndex = -1;
+  populateSelectMenus();
+  renderAll();
+
+  if (!isInitial) {
+    alert(`새 대본(${appState.cuts.length}컷)이 반영되었습니다! 이전 자막과 말풍선은 모두 초기화되었습니다.\n이제 상단 [✨ 2단계: 컷별 AI 작화 프롬프트 뽑기]로 그림을 생성해 주세요.`);
+  }
+}
+
+// 말풍선이 인물 얼굴을 가리지 않고 대사 줄 수에 맞게 자동 보정되도록 정규화
+function normalizeBubbleLayout(b) {
+  const text = String(b.text || '');
+  const lineCount = text.split('\n').length;
+  const fontSize = Number(b.fontSize) || 40;
+  const autoHeight = Math.max(155, lineCount * (fontSize * 1.45) + 75);
+
+  return {
+    type: 'bubble',
+    bubbleStyle: b.bubbleStyle || 'round',
+    tailDir: b.tailDir || 'bottom',
+    speaker: '', // 사연툰처럼 깔끔하게 이름표 기본 제거 (필요 시 우측 패널에서 입력 가능)
+    text: text,
+    fontSize: fontSize,
+    textColor: b.textColor || '#111827',
+    bgColor: b.bgColor || '#ffffff',
+    x: typeof b.x === 'number' ? b.x : 110,
+    // 상단 자막 아래 ~ 인물 머리 위 안전 영역(165~220px)으로 고정
+    y: typeof b.y === 'number' ? Math.min(b.y, 240) : 180,
+    width: typeof b.width === 'number' ? b.width : 860,
+    height: typeof b.height === 'number' ? Math.min(b.height, autoHeight + 25) : autoHeight
+  };
+}
+
+// 제미나이가 그려준 1~10컷 통짜 이미지를 한 번에 불러와 현재 대본의 각 컷에 1:1 자동 조립
 function handleBatchSceneUpload(e) {
   const files = Array.from(e.target.files || []);
   if (!files.length) return;
 
-  // 파일명 숫자순 정렬 (예: 1.png, 2.png ... 10.png)
+  // 파일명 숫자순 정렬 (1.png, 2.png ... 10.png)
   files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
 
+  // 기존 ai_scene_ 이미지 캐시 초기화 후 새로 매핑
+  Object.keys(loadedImages).forEach(key => {
+    if (key.startsWith('ai_scene_')) delete loadedImages[key];
+  });
+  DEFAULT_ASSETS.backgrounds = DEFAULT_ASSETS.backgrounds.filter(b => !b.id.startsWith('ai_scene_'));
+
   let loadedCount = 0;
+  const timestamp = Date.now();
+
   files.forEach((file, index) => {
     const reader = new FileReader();
     reader.onload = (ev) => {
       const img = new Image();
       img.onload = () => {
-        const assetKey = `ai_scene_${index + 1}_${file.name}`;
+        const assetKey = `ai_scene_${timestamp}_${index + 1}_${file.name}`;
         loadedImages[assetKey] = img;
 
-        if (!DEFAULT_ASSETS.backgrounds.some(b => b.id === assetKey)) {
-          DEFAULT_ASSETS.backgrounds.push({ id: assetKey, label: `✨ AI장면 #${index + 1} (${file.name})` });
-        }
+        DEFAULT_ASSETS.backgrounds.push({
+          id: assetKey,
+          label: `✨ AI장면 #${index + 1} (${file.name})`
+        });
 
-        // 해당 순서의 컷이 존재하면 자동으로 배경에 꽂아 넣고, 중복되는 더미 파츠 캐릭터 제거
+        // 현재 대본의 해당 컷에 새 그림 연결 (대본의 자막과 말풍선은 그대로 유지)
         if (appState.cuts[index]) {
           appState.cuts[index].background = assetKey;
-          appState.cuts[index].blurBg = false; // 이미 완성된 그림이므로 블러 해제
-          appState.cuts[index].items = (appState.cuts[index].items || []).filter(
-            it => (it.type || '').toLowerCase() !== 'character'
-          );
+          appState.cuts[index].blurBg = false;
         }
 
         loadedCount++;
         if (loadedCount === files.length) {
           populateSelectMenus();
+          appState.currentCutIndex = 0;
+          appState.selectedLayerIndex = -1;
           renderAll();
-          alert(`총 ${files.length}장의 AI 생성 웹툰 장면이 1~${files.length}컷에 자동 배치되었습니다!\n이제 상·하단 사연 자막과 말풍선 위치만 확인하세요.`);
+          alert(`총 ${files.length}장의 새 그림이 현재 대본의 1~${files.length}컷에 정확히 조립되었습니다!`);
         }
       };
       img.src = ev.target.result;
     };
     reader.readAsDataURL(file);
   });
+
+  // 같은 파일을 다시 선택해도 이벤트가 작동하도록 입력값 초기화
+  e.target.value = '';
 }
 
+// 개별 컷 이미지 교체 (특정 1컷만 다시 뽑아 바꿀 때 사용)
 function handleLocalAssetUpload(e) {
   const files = Array.from(e.target.files || []);
   if (!files.length) return;
 
-  files.forEach(file => {
+  files.forEach((file, idx) => {
     const reader = new FileReader();
     reader.onload = (ev) => {
       const img = new Image();
       img.onload = () => {
-        loadedImages[file.name] = img;
-        let category = 'characters';
-        if (file.name.startsWith('bg_') || file.name.startsWith('scene_')) category = 'backgrounds';
-        else if (file.name.startsWith('outfit_')) category = 'outfits';
-        else if (file.name.startsWith('sticker_')) category = 'stickers';
+        const key = `custom_${Date.now()}_${file.name}`;
+        loadedImages[key] = img;
+        DEFAULT_ASSETS.backgrounds.push({ id: key, label: `💻 교체이미지 (${file.name})` });
 
-        if (!DEFAULT_ASSETS[category].some(item => item.id === file.name)) {
-          DEFAULT_ASSETS[category].push({ id: file.name, label: `💻 ${file.name}` });
+        // 첫 번째 선택한 이미지는 현재 보고 있는 컷에 즉시 적용
+        if (idx === 0 && appState.cuts[appState.currentCutIndex]) {
+          appState.cuts[appState.currentCutIndex].background = key;
+          appState.cuts[appState.currentCutIndex].blurBg = false;
         }
         populateSelectMenus();
         renderAll();
@@ -396,10 +457,11 @@ function handleLocalAssetUpload(e) {
     };
     reader.readAsDataURL(file);
   });
+  e.target.value = '';
 }
 
 // ============================================================================
-// 4. 배경(AI 통짜 이미지 비율 맞춤 크롭), 분위기 연출, 사연 자막 렌더링
+// 4. 캔버스 렌더링 엔진 (비율 맞춤 크롭, 연출 효과, 사연 자막, 말풍선)
 // ============================================================================
 function drawImageCover(c, img, pad = 0) {
   const targetW = CANVAS_W + pad * 2;
@@ -423,15 +485,12 @@ function drawImageCover(c, img, pad = 0) {
 }
 
 function drawBackgroundAndMood(c, cut) {
-  const bgId = cut.background || 'bg_home.png';
+  const bgId = cut.background || 'bg_empty.png';
 
   c.save();
-  if (cut.blurBg) {
-    c.filter = 'blur(12px)';
-  }
+  if (cut.blurBg) c.filter = 'blur(12px)';
 
   if (loadedImages[bgId]) {
-    // 1:1이나 3:4 등 어떤 비율로 생성된 AI 이미지든 1080x1350 화면에 찌그러짐 없이 꽉 채움
     drawImageCover(c, loadedImages[bgId], cut.blurBg ? 30 : 0);
   } else {
     drawBuiltinBackground(c, bgId);
@@ -440,10 +499,7 @@ function drawBackgroundAndMood(c, cut) {
 
   if (cut.darkMood) {
     c.save();
-    const darkGrad = c.createRadialGradient(
-      CANVAS_W * 0.45, CANVAS_H * 0.58, 180,
-      CANVAS_W * 0.5, CANVAS_H * 0.5, 920
-    );
+    const darkGrad = c.createRadialGradient(CANVAS_W * 0.45, CANVAS_H * 0.58, 180, CANVAS_W * 0.5, CANVAS_H * 0.5, 920);
     darkGrad.addColorStop(0, 'rgba(15, 23, 42, 0.15)');
     darkGrad.addColorStop(0.58, 'rgba(15, 23, 42, 0.65)');
     darkGrad.addColorStop(1, 'rgba(2, 6, 23, 0.90)');
@@ -452,18 +508,30 @@ function drawBackgroundAndMood(c, cut) {
     c.restore();
   }
 
-  if (cut.speedLines) {
-    drawSpeedLines(c);
-  }
+  if (cut.speedLines) drawSpeedLines(c);
 }
 
 function drawBuiltinBackground(c, bgId) {
+  if (bgId === 'bg_empty.png') {
+    c.fillStyle = '#f8fafc';
+    c.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    c.strokeStyle = '#cbd5e1';
+    c.lineWidth = 4;
+    c.setLineDash([16, 12]);
+    c.strokeRect(60, 420, CANVAS_W - 120, 680);
+    c.setLineDash([]);
+    c.fillStyle = '#64748b';
+    c.font = '700 32px "Noto Sans KR", sans-serif';
+    c.textAlign = 'center';
+    c.fillText('상단 [🖼️ AI 생성 컷 일괄 넣기]로', CANVAS_W / 2, 730);
+    c.fillText('제미나이가 그린 그림을 넣어주세요', CANVAS_W / 2, 785);
+    return;
+  }
   if (bgId.includes('dark')) {
     const grad = c.createLinearGradient(0, 0, 0, CANVAS_H);
     grad.addColorStop(0, '#1e293b');
     grad.addColorStop(1, '#475569');
     c.fillStyle = grad;
-    c.fillRect(0, 0, CANVAS_W, CANVAS_H);
   } else if (bgId.includes('forest')) {
     const grad = c.createLinearGradient(0, 0, 0, CANVAS_H);
     grad.addColorStop(0, '#bae6fd');
@@ -471,22 +539,16 @@ function drawBuiltinBackground(c, bgId) {
     grad.addColorStop(0.62, '#86efac');
     grad.addColorStop(1, '#22c55e');
     c.fillStyle = grad;
-    c.fillRect(0, 0, CANVAS_W, CANVAS_H);
   } else if (bgId.includes('hospital')) {
     c.fillStyle = '#f0fdf4';
-    c.fillRect(0, 0, CANVAS_W, CANVAS_H);
-    c.fillStyle = '#dcfce7';
-    c.fillRect(0, 920, CANVAS_W, 430);
   } else if (bgId.includes('bathroom')) {
     c.fillStyle = '#e0f2fe';
-    c.fillRect(0, 0, CANVAS_W, CANVAS_H);
   } else if (bgId.includes('office')) {
     c.fillStyle = '#eff6ff';
-    c.fillRect(0, 0, CANVAS_W, CANVAS_H);
   } else {
     c.fillStyle = '#fef3c7';
-    c.fillRect(0, 0, CANVAS_W, CANVAS_H);
   }
+  c.fillRect(0, 0, CANVAS_W, CANVAS_H);
 }
 
 function drawSpeedLines(c) {
@@ -495,12 +557,10 @@ function drawSpeedLines(c) {
   const cy = CANVAS_H * 0.55;
   const outerR = 950;
   const lineCount = 72;
-
   for (let i = 0; i < lineCount; i++) {
     const angle = (i / lineCount) * Math.PI * 2;
     const innerR = 380 + (i % 3) * 55;
     const spread = 0.015;
-
     c.fillStyle = i % 2 === 0 ? 'rgba(255, 255, 255, 0.35)' : 'rgba(15, 23, 42, 0.22)';
     c.beginPath();
     c.moveTo(cx + Math.cos(angle) * innerR, cy + Math.sin(angle) * innerR);
@@ -528,11 +588,11 @@ function drawStoryCaptions(c, cut, cutNumber, totalCuts) {
     c.textAlign = 'left';
     c.fillText(headerText.replace(/\n/g, ' '), 36, 46);
   } else {
-    if (headerText) drawCaptionBlock(c, headerText, 44, 'top', style, fontSize);
-    if (footerText) drawCaptionBlock(c, footerText, CANVAS_H - 44, 'bottom', style, fontSize);
+    if (headerText) drawCaptionBlock(c, headerText, 40, 'top', style, fontSize);
+    if (footerText) drawCaptionBlock(c, footerText, CANVAS_H - 40, 'bottom', style, fontSize);
   }
 
-  // 우측 상단 반투명 페이지 번호
+  // 우측 상단 반투명 페이지 표시
   c.font = '700 22px "Noto Sans KR", sans-serif';
   const badgeText = `${cutNumber}/${totalCuts}`;
   c.fillStyle = 'rgba(15, 23, 42, 0.55)';
@@ -552,7 +612,6 @@ function drawCaptionBlock(c, text, anchorY, position, style, fontSize) {
   c.font = `900 ${fontSize}px "Noto Sans KR", sans-serif`;
   c.textAlign = 'left';
   c.textBaseline = 'top';
-
   const startX = 42;
   const totalH = lines.length * lineHeight;
   const startY = position === 'top' ? anchorY : anchorY - totalH;
@@ -562,66 +621,25 @@ function drawCaptionBlock(c, text, anchorY, position, style, fontSize) {
     lines.forEach(l => { maxW = Math.max(maxW, c.measureText(l).width); });
     const boxW = Math.min(CANVAS_W - 64, maxW + 44);
     const boxH = totalH + 24;
-
     c.fillStyle = '#ffffff';
     c.strokeStyle = '#111827';
     c.lineWidth = 7;
     c.fillRect(startX - 16, startY - 12, boxW, boxH);
     c.strokeRect(startX - 16, startY - 12, boxW, boxH);
-
     c.fillStyle = '#111827';
-    lines.forEach((line, idx) => {
-      c.fillText(line, startX + 4, startY + idx * lineHeight);
-    });
+    lines.forEach((line, idx) => { c.fillText(line, startX + 4, startY + idx * lineHeight); });
   } else {
     c.lineJoin = 'round';
     c.miterLimit = 2;
     c.lineWidth = Math.max(10, Math.round(fontSize * 0.24));
     c.strokeStyle = '#0f172a';
     c.fillStyle = '#ffffff';
-
     lines.forEach((line, idx) => {
       const y = startY + idx * lineHeight;
       c.strokeText(line, startX, y);
       c.fillText(line, startX, y);
     });
   }
-}
-
-// ============================================================================
-// 5. 레이어 렌더링 (파츠 캐릭터, 스티커, 말풍선/효과음)
-// ============================================================================
-function drawCharacterLayer(c, item) {
-  const { charId = 'none', outfitId = 'none', x, y, width, height, flipX } = item;
-  if (!charId || charId === 'none') return;
-
-  c.save();
-  c.translate(x + width / 2, y + height / 2);
-  if (flipX) c.scale(-1, 1);
-  c.translate(-width / 2, -height / 2);
-
-  if (loadedImages[charId]) {
-    c.drawImage(loadedImages[charId], 0, 0, width, height);
-    if (outfitId && outfitId !== 'none' && loadedImages[outfitId]) {
-      c.drawImage(loadedImages[outfitId], 0, 0, width, height);
-    }
-  } else {
-    // 아직 이미지가 없는 경우 간단한 안내 박스만 표시
-    c.fillStyle = 'rgba(255, 255, 255, 0.85)';
-    c.strokeStyle = '#3b82f6';
-    c.lineWidth = 4;
-    c.setLineDash([10, 8]);
-    c.beginPath();
-    c.roundRect(0, 0, width, height, 24);
-    c.fill();
-    c.stroke();
-    c.setLineDash([]);
-    c.fillStyle = '#1e3a8a';
-    c.font = '700 28px "Noto Sans KR", sans-serif';
-    c.textAlign = 'center';
-    c.fillText(charId, width / 2, height / 2);
-  }
-  c.restore();
 }
 
 function drawStickerLayer(c, item) {
@@ -657,10 +675,6 @@ function drawStickerLayer(c, item) {
       c.arc(0, 0, 75, 0, Math.PI * 2);
       c.fill();
       c.stroke();
-      c.beginPath();
-      c.arc(-26, -10, 12, Math.PI, 0);
-      c.arc(26, -10, 12, Math.PI, 0);
-      c.stroke();
       c.restore();
     });
   } else {
@@ -682,13 +696,12 @@ function drawBubbleLayer(c, item) {
     speaker = '',
     bubbleStyle = 'round',
     tailDir = 'bottom',
-    fontSize = 44,
+    fontSize = 40,
     textColor = '#111827',
     bgColor = '#ffffff'
   } = item;
 
   c.save();
-
   if (bubbleStyle === 'plain') {
     c.font = `900 ${fontSize}px "Jua", "Noto Sans KR", sans-serif`;
     c.textAlign = 'center';
@@ -716,8 +729,7 @@ function drawBubbleLayer(c, item) {
       const angle = (i / (spikes * 2)) * Math.PI * 2;
       const px = cx + Math.cos(angle) * (width * 0.5) * rFactor;
       const py = cy + Math.sin(angle) * (height * 0.5) * rFactor;
-      if (i === 0) c.moveTo(px, py);
-      else c.lineTo(px, py);
+      if (i === 0) c.moveTo(px, py); else c.lineTo(px, py);
     }
     c.closePath();
     c.fill();
@@ -735,19 +747,16 @@ function drawBubbleLayer(c, item) {
       const dirSign = tailDir === 'right' ? 1 : -1;
       const bx = x + width * (tailDir === 'right' ? 0.78 : 0.22);
       const by = y + height * 0.94;
-      c.beginPath(); c.arc(bx, by + 16, 16, 0, Math.PI * 2); c.fill(); c.stroke();
-      c.beginPath(); c.arc(bx + dirSign * 14, by + 44, 10, 0, Math.PI * 2); c.fill(); c.stroke();
+      c.beginPath(); c.arc(bx, by + 16, 15, 0, Math.PI * 2); c.fill(); c.stroke();
+      c.beginPath(); c.arc(bx + dirSign * 14, by + 42, 9, 0, Math.PI * 2); c.fill(); c.stroke();
     }
   } else {
     c.fillStyle = bgColor;
     c.strokeStyle = '#111827';
     c.lineWidth = 7;
     c.beginPath();
-    if (bubbleStyle === 'title') {
-      c.roundRect(x, y, width, height, 24);
-    } else {
-      c.ellipse(x + width / 2, y + height / 2, width * 0.49, height * 0.48, 0, 0, Math.PI * 2);
-    }
+    if (bubbleStyle === 'title') c.roundRect(x, y, width, height, 24);
+    else c.ellipse(x + width / 2, y + height / 2, width * 0.49, height * 0.48, 0, 0, Math.PI * 2);
     c.fill();
     c.stroke();
 
@@ -755,19 +764,18 @@ function drawBubbleLayer(c, item) {
       let tailX = x + width * 0.5;
       if (tailDir === 'left') tailX = x + width * 0.28;
       else if (tailDir === 'right') tailX = x + width * 0.72;
-
       c.fillStyle = bgColor;
       c.beginPath();
-      c.moveTo(tailX - 22, y + height * 0.9);
-      c.lineTo(tailX + (tailDir === 'left' ? -36 : tailDir === 'right' ? 36 : 0), y + height + 44);
-      c.lineTo(tailX + 22, y + height * 0.9);
+      c.moveTo(tailX - 20, y + height * 0.9);
+      c.lineTo(tailX + (tailDir === 'left' ? -34 : tailDir === 'right' ? 34 : 0), y + height + 40);
+      c.lineTo(tailX + 20, y + height * 0.9);
       c.closePath();
       c.fill();
 
       c.beginPath();
-      c.moveTo(tailX - 22, y + height * 0.91);
-      c.lineTo(tailX + (tailDir === 'left' ? -36 : tailDir === 'right' ? 36 : 0), y + height + 44);
-      c.lineTo(tailX + 22, y + height * 0.91);
+      c.moveTo(tailX - 20, y + height * 0.91);
+      c.lineTo(tailX + (tailDir === 'left' ? -34 : tailDir === 'right' ? 34 : 0), y + height + 40);
+      c.lineTo(tailX + 20, y + height * 0.91);
       c.stroke();
     }
   }
@@ -790,11 +798,9 @@ function drawBubbleLayer(c, item) {
   c.font = `900 ${fontSize}px ${fontFamily}`;
   c.textAlign = 'center';
   c.textBaseline = 'middle';
-
   const maxLineW = width - 80;
   const rawLines = String(text).split('\n');
   const wrappedLines = [];
-
   rawLines.forEach(rawLine => {
     let currentLine = '';
     for (let i = 0; i < rawLine.length; i++) {
@@ -808,34 +814,27 @@ function drawBubbleLayer(c, item) {
     }
     wrappedLines.push(currentLine);
   });
-
   const lineHeight = fontSize * 1.32;
   const totalTextH = wrappedLines.length * lineHeight;
   let startY = y + (height - totalTextH) / 2 + lineHeight / 2;
-
   wrappedLines.forEach(line => {
     c.fillText(line, x + width / 2, startY);
     startY += lineHeight;
   });
-
   c.restore();
 }
 
-// ============================================================================
-// 6. 캔버스 렌더링 및 UI 동기화
-// ============================================================================
 function renderCutToContext(targetCtx, cutIndex, showSelection = false) {
   const cut = appState.cuts[cutIndex];
   if (!cut) return;
-
   targetCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+
   drawBackgroundAndMood(targetCtx, cut);
 
   (cut.items || []).forEach((item, idx) => {
     const t = (item.type || '').toLowerCase();
-    if (t === 'character') drawCharacterLayer(targetCtx, item);
+    if (t === 'bubble') drawBubbleLayer(targetCtx, item);
     else if (t === 'sticker') drawStickerLayer(targetCtx, item);
-    else if (t === 'bubble') drawBubbleLayer(targetCtx, item);
 
     if (showSelection && idx === appState.selectedLayerIndex) {
       drawSelectionBox(targetCtx, item);
@@ -899,15 +898,10 @@ function renderThumbnailsAndGrid() {
     card.innerHTML = `
       <div class="cut-thumb-header">
         <span>#${String(idx + 1).padStart(2, '0')}컷</span>
-        <span>${(cut.items || []).length}요소</span>
       </div>
-      <img src="${dataUrl}" class="cut-thumb-preview" alt="${idx + 1}컷 미리보기">
+      <img src="${dataUrl}" class="cut-thumb-preview" alt="${idx + 1}컷">
     `;
-    card.addEventListener('click', () => {
-      appState.currentCutIndex = idx;
-      appState.selectedLayerIndex = -1;
-      renderAll();
-    });
+    card.addEventListener('click', () => { appState.currentCutIndex = idx; appState.selectedLayerIndex = -1; renderAll(); });
     thumbList.appendChild(card);
 
     if (appState.viewMode === 'grid') {
@@ -943,15 +937,13 @@ function setViewMode(mode) {
 }
 
 // ============================================================================
-// 7. 마우스 드래그 이동 & 리사이즈
+// 5. 마우스 드래그 이동 & 리사이즈 핸들
 // ============================================================================
 function getCanvasMousePos(e) {
   const rect = mainCanvas.getBoundingClientRect();
-  const scaleX = CANVAS_W / rect.width;
-  const scaleY = CANVAS_H / rect.height;
   return {
-    x: (e.clientX - rect.left) * scaleX,
-    y: (e.clientY - rect.top) * scaleY
+    x: (e.clientX - rect.left) * (CANVAS_W / rect.width),
+    y: (e.clientY - rect.top) * (CANVAS_H / rect.height)
   };
 }
 
@@ -998,17 +990,10 @@ function bindCanvasMouseEvents() {
         break;
       }
     }
-
     appState.selectedLayerIndex = foundIdx;
     if (foundIdx >= 0) {
       const selItem = cut.items[foundIdx];
-      dragState = {
-        isDragging: true,
-        mode: 'move',
-        startX: pos.x,
-        startY: pos.y,
-        initialBox: { x: selItem.x, y: selItem.y, width: selItem.width, height: selItem.height }
-      };
+      dragState = { isDragging: true, mode: 'move', startX: pos.x, startY: pos.y, initialBox: { x: selItem.x, y: selItem.y, width: selItem.width, height: selItem.height } };
     }
     renderAll();
   });
@@ -1018,7 +1003,6 @@ function bindCanvasMouseEvents() {
     const cut = appState.cuts[appState.currentCutIndex];
     const item = cut?.items[appState.selectedLayerIndex];
     if (!item) return;
-
     const pos = getCanvasMousePos(e);
     const dx = pos.x - dragState.startX;
     const dy = pos.y - dragState.startY;
@@ -1048,26 +1032,19 @@ function bindCanvasMouseEvents() {
       item.width = newW;
       item.height = newH;
     }
-
     renderCutToContext(ctx, appState.currentCutIndex, true);
   });
 
-  window.addEventListener('mouseup', () => {
-    if (dragState.isDragging) {
-      dragState.isDragging = false;
-      renderAll();
-    }
-  });
+  window.addEventListener('mouseup', () => { if (dragState.isDragging) { dragState.isDragging = false; renderAll(); } });
 }
 
 // ============================================================================
-// 8. 우측 속성 인스펙터 및 프롬프트 모달 2종
+// 6. 우측 속성 인스펙터 & UI 이벤트
 // ============================================================================
 function syncInspectorWithSelection() {
   const cut = appState.cuts[appState.currentCutIndex];
   if (!cut) return;
-
-  document.getElementById('bgSelect').value = cut.background || 'bg_home.png';
+  document.getElementById('bgSelect').value = cut.background || 'bg_empty.png';
   document.getElementById('cutHeaderInput').value = cut.headerText || '';
   document.getElementById('cutFooterInput').value = cut.footerText || '';
   document.getElementById('captionStyleSelect').value = cut.captionStyle || 'outline';
@@ -1080,12 +1057,10 @@ function syncInspectorWithSelection() {
   const item = cut.items[appState.selectedLayerIndex];
   const noSelMsg = document.getElementById('noSelectionMsg');
   const commonCtrl = document.getElementById('commonLayerControls');
-  const charInsp = document.getElementById('charInspector');
   const bubbleInsp = document.getElementById('bubbleInspector');
   const stickerInsp = document.getElementById('stickerInspector');
   const badge = document.getElementById('selectedTypeBadge');
 
-  charInsp.classList.add('hidden');
   bubbleInsp.classList.add('hidden');
   stickerInsp.classList.add('hidden');
 
@@ -1095,24 +1070,18 @@ function syncInspectorWithSelection() {
     badge.textContent = '선택 없음';
     return;
   }
-
   noSelMsg.classList.add('hidden');
   commonCtrl.classList.remove('hidden');
 
   const type = (item.type || '').toLowerCase();
-  if (type === 'character') {
-    badge.textContent = '🐯 캐릭터 파츠';
-    charInsp.classList.remove('hidden');
-    document.getElementById('charSelect').value = item.charId || 'none';
-    document.getElementById('outfitSelect').value = item.outfitId || 'none';
-  } else if (type === 'bubble') {
+  if (type === 'bubble') {
     badge.textContent = '💬 말풍선/효과음';
     bubbleInsp.classList.remove('hidden');
     document.getElementById('speakerInput').value = item.speaker || '';
     document.getElementById('dialogueTextarea').value = item.text || '';
     document.getElementById('bubbleStyleSelect').value = item.bubbleStyle || 'round';
     document.getElementById('bubbleTailSelect').value = item.tailDir || 'bottom';
-    document.getElementById('fontSizeInput').value = item.fontSize || 44;
+    document.getElementById('fontSizeInput').value = item.fontSize || 40;
     document.getElementById('textColorInput').value = item.textColor || '#111827';
     document.getElementById('bubbleBgColorInput').value = item.bgColor || '#ffffff';
   } else if (type === 'sticker') {
@@ -1124,19 +1093,30 @@ function syncInspectorWithSelection() {
 
 function bindUIEvents() {
   document.getElementById('btnSyncGithub').addEventListener('click', () => {
-    const owner = document.getElementById('ghOwner').value.trim();
-    const repo = document.getElementById('ghRepo').value.trim();
-    const branch = document.getElementById('ghBranch').value.trim() || 'main';
-    syncGithubAssets(owner, repo, branch, false);
+    syncGithubAssets(document.getElementById('ghOwner').value.trim(), document.getElementById('ghRepo').value.trim(), document.getElementById('ghBranch').value.trim() || 'main', false);
   });
 
   document.getElementById('batchSceneInput').addEventListener('change', handleBatchSceneUpload);
   document.getElementById('localAssetInput').addEventListener('change', handleLocalAssetUpload);
 
+  // 전체 백지 초기화 버튼
+  document.getElementById('btnClearWorkspace').addEventListener('click', () => {
+    if (!confirm('현재 작업 중인 자막, 말풍선, 이미지를 모두 비우고 초기 상태로 되돌릴까요?')) return;
+    loadedImages = {};
+    DEFAULT_ASSETS.backgrounds = DEFAULT_ASSETS.backgrounds.filter(b => !b.id.startsWith('ai_scene_') && !b.id.startsWith('custom_'));
+    document.getElementById('jsonScriptInput').value = '';
+    document.getElementById('episodeTitleInput').value = '새_에피소드';
+    appState.cuts = createEmpty10Cuts();
+    appState.currentCutIndex = 0;
+    appState.selectedLayerIndex = -1;
+    populateSelectMenus();
+    renderAll();
+  });
+
   document.getElementById('btnLoadSample').addEventListener('click', () => {
     const sample = getSampleScriptData();
     document.getElementById('jsonScriptInput').value = JSON.stringify(sample, null, 2);
-    applyScriptToState(sample);
+    applyScriptToState(sample, false);
   });
 
   document.getElementById('btnGenerateWebtoon').addEventListener('click', () => {
@@ -1145,7 +1125,7 @@ function bindUIEvents() {
     try {
       const cleaned = raw.replace(/^```json\s*/i, '').replace(/```$/i, '').trim();
       const parsed = JSON.parse(cleaned);
-      applyScriptToState(parsed);
+      applyScriptToState(parsed, false);
     } catch (err) {
       alert('JSON 형식이 올바르지 않습니다.\n오류: ' + err.message);
     }
@@ -1155,31 +1135,23 @@ function bindUIEvents() {
   document.getElementById('tabGridView').addEventListener('click', () => setViewMode('grid'));
 
   document.getElementById('btnPrevCut').addEventListener('click', () => {
-    if (appState.currentCutIndex > 0) {
-      appState.currentCutIndex--;
-      appState.selectedLayerIndex = -1;
-      renderAll();
-    }
+    if (appState.currentCutIndex > 0) { appState.currentCutIndex--; appState.selectedLayerIndex = -1; renderAll(); }
   });
 
   document.getElementById('btnNextCut').addEventListener('click', () => {
-    if (appState.currentCutIndex < appState.cuts.length - 1) {
-      appState.currentCutIndex++;
-      appState.selectedLayerIndex = -1;
-      renderAll();
-    }
+    if (appState.currentCutIndex < appState.cuts.length - 1) { appState.currentCutIndex++; appState.selectedLayerIndex = -1; renderAll(); }
   });
 
   document.getElementById('btnAddCut').addEventListener('click', () => {
     appState.cuts.push({
-      background: 'bg_home.png',
-      scenePrompt: '호랑이 연구원이 웃으며 설명하는 장면',
+      background: 'bg_empty.png',
+      scenePrompt: '',
       blurBg: false,
       darkMood: false,
       speedLines: false,
       captionStyle: 'outline',
       captionSize: 46,
-      headerText: '새로운 사연 자막을 입력하세요',
+      headerText: '새 자막을 입력하세요',
       footerText: '',
       items: []
     });
@@ -1253,22 +1225,10 @@ function bindUIEvents() {
       tailDir: 'bottom',
       speaker: '',
       text: '새로운 대사를 입력하세요',
-      fontSize: 42,
+      fontSize: 40,
       textColor: '#111827',
       bgColor: '#ffffff',
-      x: 150, y: 220, width: 780, height: 220
-    });
-    appState.selectedLayerIndex = cut.items.length - 1;
-    renderAll();
-  });
-
-  document.getElementById('btnAddChar').addEventListener('click', () => {
-    const cut = appState.cuts[appState.currentCutIndex];
-    cut.items.push({
-      type: 'character',
-      charId: 'tiger_normal.png',
-      outfitId: 'none',
-      x: 340, y: 500, width: 420, height: 710, flipX: false
+      x: 150, y: 185, width: 780, height: 195
     });
     appState.selectedLayerIndex = cut.items.length - 1;
     renderAll();
@@ -1282,6 +1242,14 @@ function bindUIEvents() {
       x: 520, y: 450, width: 440, height: 480, flipX: false
     });
     appState.selectedLayerIndex = cut.items.length - 1;
+    renderAll();
+  });
+
+  document.getElementById('btnClearCutBubbles').addEventListener('click', () => {
+    const cut = appState.cuts[appState.currentCutIndex];
+    if (!cut) return;
+    cut.items = [];
+    appState.selectedLayerIndex = -1;
     renderAll();
   });
 
@@ -1322,14 +1290,6 @@ function bindUIEvents() {
     }
   });
 
-  document.getElementById('charSelect').addEventListener('change', (e) => {
-    const item = getSelectedItem();
-    if (item) { item.charId = e.target.value; renderAll(); }
-  });
-  document.getElementById('outfitSelect').addEventListener('change', (e) => {
-    const item = getSelectedItem();
-    if (item) { item.outfitId = e.target.value; renderAll(); }
-  });
   document.getElementById('speakerInput').addEventListener('input', (e) => {
     const item = getSelectedItem();
     if (item) { item.speaker = e.target.value; renderAll(); }
@@ -1348,7 +1308,7 @@ function bindUIEvents() {
   });
   document.getElementById('fontSizeInput').addEventListener('input', (e) => {
     const item = getSelectedItem();
-    if (item) { item.fontSize = Number(e.target.value) || 44; renderAll(); }
+    if (item) { item.fontSize = Number(e.target.value) || 40; renderAll(); }
   });
   document.getElementById('textColorInput').addEventListener('input', (e) => {
     const item = getSelectedItem();
@@ -1363,7 +1323,6 @@ function bindUIEvents() {
     if (item) { item.stickerId = e.target.value; renderAll(); }
   });
 
-  // 모달 1: 시나리오 대본 프롬프트
   document.getElementById('btnOpenPromptModal').addEventListener('click', openMasterPromptModal);
   document.getElementById('btnClosePromptModal').addEventListener('click', () => {
     document.getElementById('promptModal').classList.add('hidden');
@@ -1375,7 +1334,6 @@ function bindUIEvents() {
     alert('시나리오 대본 프롬프트가 복사되었습니다!');
   });
 
-  // 모달 2: 컷별 AI 작화 프롬프트 생성기
   document.getElementById('btnOpenArtPromptModal').addEventListener('click', openArtPromptModal);
   document.getElementById('btnCloseArtPromptModal').addEventListener('click', () => {
     document.getElementById('artPromptModal').classList.add('hidden');
@@ -1396,23 +1354,8 @@ function getSelectedItem() {
   return cut ? cut.items[appState.selectedLayerIndex] : null;
 }
 
-function applyScriptToState(scriptObj) {
-  if (scriptObj.episodeTitle) {
-    appState.episodeTitle = scriptObj.episodeTitle;
-    document.getElementById('episodeTitleInput').value = scriptObj.episodeTitle;
-  }
-  if (Array.isArray(scriptObj.cuts) && scriptObj.cuts.length > 0) {
-    appState.cuts = scriptObj.cuts;
-    appState.currentCutIndex = 0;
-    appState.selectedLayerIndex = -1;
-    renderAll();
-  } else {
-    alert('대본 JSON 안에 유효한 cuts 배열이 없습니다.');
-  }
-}
-
 // ============================================================================
-// 9. 맞춤 파일명 개별 저장 및 ZIP 일괄 다운로드
+// 7. 맞춤 파일명 저장 및 ZIP 다운로드
 // ============================================================================
 function getSanitizedEpisodeName() {
   const raw = document.getElementById('episodeTitleInput').value.trim();
@@ -1480,39 +1423,44 @@ async function downloadAllCutsZip() {
 }
 
 // ============================================================================
-// 10. 프롬프트 생성기 2종 (① 시나리오 JSON용 / ② 오리지널 동물 캐릭터 작화용)
+// 8. 프롬프트 생성기 2종 (의상 고증·말풍선 위치 완벽 통제 버전)
 // ============================================================================
 function openMasterPromptModal() {
   const prompt = `너는 공공기관 인스타그램의 '감염병 예방 10컷 사연툰' 전담 스토리 작가야.
-내가 아래에 전달하는 [감염병 지침 내용]과 [원하는 주제]를 바탕으로, 몰입감 있는 라디오 사연식 10컷 웹툰 시나리오를 순수 JSON 형식으로 작성해 줘.
+내가 아래에 전달하는 [감염병 지침 내용]과 [원하는 주제]를 바탕으로 몰입감 있는 10컷 웹툰 시나리오를 순수 JSON 형식으로 작성해 줘.
 
-[작성 규칙]
-1. 반드시 순수 JSON 코드만 출력해 (설명 생략).
-2. "episodeTitle"에는 파일 저장용 제목(예: "SFTS_예방법", "기승전_손씻기")을 언더바(_)로 구분해 넣어 줘.
-3. "cuts" 배열에는 정확히 10개의 컷을 구성하되, 각 컷마다 아래 항목을 포함해:
-   - "scenePrompt": 제미나이 이미지 생성 AI가 그릴 장면 묘사 (주인공은 흰 가운을 입은 듬직한 호랑이 연구원과 귀여운 토끼/양 시민 캐릭터로 구성, 인물 표정과 동작·배경을 구체적으로 묘사)
-   - "headerText": 화면 상단에 들어갈 사연 내레이션 자막 (2줄 이내 \\n)
-   - "footerText": 화면 하단에 들어갈 사연 내레이션 자막 (필요 시 1~2줄)
+[매우 중요한 작성 규칙]
+1. 반드시 순수 JSON 코드만 출력해 (설명, 인사말 생략).
+2. "episodeTitle"에는 파일 저장용 제목(예: "노로바이러스_손씻기", "SFTS_예방법")을 언더바(_)로 넣어 줘.
+3. "cuts" 배열에는 정확히 10개의 컷을 구성해:
+   - "scenePrompt": 제미나이 이미지 AI가 그릴 장면 묘사.
+     * 반드시 등장인물의 의상(예: '밝은색 긴팔 긴바지', '흰색 연구원 가운')과 좌우 위치(예: '왼쪽에 호랑이 연구원, 오른쪽에 토끼 시민')를 명확히 적어 줘.
+     * 인물은 화면 중앙~하단부에 배치되도록 묘사해.
+   - "headerText": 화면 상단 사연 내레이션 자막 (2줄 이내 \\n)
+   - "footerText": 화면 하단 보조 내레이션 자막 (1줄)
    - "darkMood" (true/false): 위기나 불안한 장면일 때 true
    - "speedLines" (true/false): 충격·강조 장면일 때 true
-   - "items": 각 컷 위에 얹을 말풍선 배열 (상단 180~440px 영역에 배치, speaker는 빈 문자열 "" 유지)
+   - "items": 말풍선 배열 (가장 중요!):
+     * 캐릭터 얼굴을 절대 가리지 않도록 y 좌표는 반드시 175 ~ 210 사이, height는 185 ~ 210 사이로 상단 여백에만 배치해!
+     * 왼쪽 캐릭터가 말하면 "tailDir": "left" (x: 80~120), 오른쪽 캐릭터가 말하면 "tailDir": "right" (x: 420~480)로 꼬리 방향을 정확히 일치시켜!
+     * "speaker"는 반드시 빈 문자열 ""로 비워 둬.
 
 [JSON 출력 양식 예시]
 {
   "episodeTitle": "감염병명_주제",
   "cuts": [
     {
-      "background": "bg_forest.png",
-      "scenePrompt": "반팔을 입고 등산하는 토끼와 흰색 연구원 가운을 입고 X자를 그리며 말리는 호랑이 연구원, 배경은 흐릿한 숲속",
+      "background": "bg_empty.png",
+      "scenePrompt": "왼쪽에는 흰색 연구원 가운을 입은 호랑이 연구원이 손가락을 들어 설명하고, 오른쪽에는 밝은 노란색 긴팔 티셔츠와 긴바지를 입은 토끼 시민이 고개를 끄덕이는 모습, 화면 하단부에 나란히 배치",
       "blurBg": false,
       "darkMood": false,
       "speedLines": false,
       "captionStyle": "outline",
       "captionSize": 46,
       "headerText": "상단 내레이션 자막 첫 줄\\n두 번째 줄",
-      "footerText": "하단 보조 내레이션 자막",
+      "footerText": "하단 보조 자막 한 줄",
       "items": [
-        { "type": "bubble", "bubbleStyle": "round", "tailDir": "left", "speaker": "", "text": "말풍선 대사 내용!", "fontSize": 42, "textColor": "#111827", "bgColor": "#ffffff", "x": 120, "y": 210, "width": 840, "height": 220 }
+        { "type": "bubble", "bubbleStyle": "round", "tailDir": "left", "speaker": "", "text": "말풍선 대사 내용!\\n두 줄 이내로 작성", "fontSize": 40, "textColor": "#111827", "bgColor": "#ffffff", "x": 100, "y": 180, "width": 520, "height": 195 }
       ]
     }
   ]
@@ -1527,14 +1475,17 @@ function openMasterPromptModal() {
 }
 
 function openArtPromptModal() {
-  const header = `[공통 고정 화풍 및 저작권 안전 지침]
-- 스타일: 굵고 깔끔한 검은색 펜 외곽선(Thick black ink outlines), 단순하고 코믹한 이목구비, 2D 플랫 채색, 배경은 피사체 집중을 위해 은은한 가우시안 블러(흐림) 또는 단색 그라데이션 처리된 오리지널 한국 인스타툰 스타일.
-- 고정 캐릭터 디자인 (모든 컷에서 일관성 유지):
-  1) 호랑이 연구원: 흰색 실험실/연구원 가운과 파란 넥타이를 맨 듬직하고 친절한 주황색 줄무늬 호랑이 캐릭터.
-  2) 토끼 시민: 동그랗고 귀여운 하얀 토끼 캐릭터 (상황에 따라 일상복 또는 등산복 착용).
-- 중요 주의사항: 그림 안에 어떠한 글씨, 자막, 말풍선, 텍스트도 절대 넣지 말고 순수 일러스트 장면만 그려줘! (자막과 말풍선은 별도 프로그램에서 얹을 예정임).
+  const header = `[공통 고정 화풍 및 품질 엄격 지침]
+- 스타일: 굵고 깔끔한 검은색 펜 외곽선(Thick black ink outlines), 2D 플랫 채색, 배경은 피사체가 돋보이도록 은은하게 흐림(Gaussian blur) 처리된 오리지널 한국 인스타툰 스타일.
+- 고정 캐릭터 디자인 (1번부터 10번 컷까지 절대 변하지 않게 유지):
+  1) 호랑이 연구원: 흰색 실험실/연구원 가운과 파란 넥타이를 맨 듬직한 주황색 줄무늬 호랑이 캐릭터.
+  2) 토끼 시민: 동그랗고 귀여운 하얀 토끼 캐릭터 (대본 지시에 명시된 긴팔·긴바지 등 의상을 모든 컷에서 정확히 착용).
+- 구도 및 여백 (매우 중요):
+  * 상단 25%와 하단 15% 공간에는 프로그램에서 자막과 말풍선을 얹을 예정이므로 비워두고, 캐릭터들은 반드시 화면 중앙~하단부(하반신 또는 무릎 위 상반신 구도)에 배치해 줘.
+- 절대 금지 사항:
+  * 그림 안에 어떠한 글씨, 한글, 영어, 자막, 말풍선, 숫자도 절대 넣지 마!
+  * 캐릭터의 얼굴이나 눈·입 위에 초록색 원이나 이상한 도형, 마스크가 덮이지 않도록 이목구비를 선명하고 깨끗하게 그려 줘!
 - 비율: 세로형 4:5 비율 (1080x1350).
-- 인물 배치: 상단(20%)과 하단(15%)에는 자막이 들어갈 수 있도록 여백을 두고, 캐릭터는 화면 중앙~하단부에 큼직하게 배치해 줘.
 
 =========================================
 아래 1번부터 10번까지 순서대로 한 컷씩 그려줘:
