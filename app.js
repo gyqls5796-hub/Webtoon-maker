@@ -1,6 +1,6 @@
 /**
  * 인스타그램 10컷 웹툰 자동 제작기 (원포인트 스토리툰 + 자유 꼬리 + 멀티 세계관 + 자동 시퀀스 MP4 에디션)
- * - 상단 자막 겹침 원천 차단 오토 레이아웃 및 2단계 작화 구도 자동 연동 버전
+ * - 상단 자막 겹침 방지 및 말풍선 자동 높이 확장(글자 밖 탈출 방지) 완벽 반영 버전
  */
 
 const CANVAS_W = 1080;
@@ -41,11 +41,11 @@ const WORLD_PRESETS = {
   },
   aquatic: {
     name: '물가·수생 생물 (수인성/모기 유충 테마)',
-    desc: '1) 연구원: 흰색 연구원 가운을 입은 부지런한 수달 박사.\n  2) 시민: 초록 청개구리 캐릭터.'
+    desc: '1) 연구원: 흰색 실험실 가운을 입은 부지런한 수달 박사.\n  2) 시민: 초록 청개구리 캐릭터.'
   },
   insect: {
     name: '곤충·절지동물 월드 (매개체 테마)',
-    desc: '1) 연구원: 흰색 연구원 가운을 입은 사마귀 박사.\n  2) 시민: 동글동글한 무당벌레 캐릭터.'
+    desc: '1) 연구원: 흰색 실험실 가운을 입은 사마귀 박사.\n  2) 시민: 동글동글한 무당벌레 캐릭터.'
   }
 };
 
@@ -103,7 +103,7 @@ function getSampleScriptData() {
         headerText: "선명한 바람이 부는 주말,\n토끼 시민의 설레는 산책 준비!",
         footerText: "야외활동 전 필수 수칙 1탄: 밝은색 긴옷 착용",
         items: [
-          { type: "bubble", bubbleStyle: "round", tailDir: "left", speaker: "", text: "날씨도 좋은데 가벼운 차림으로\n뒷산 풀밭 산책 다녀와야지!", fontSize: 38, textColor: "#111827", bgColor: "#ffffff", x: 90, width: 900, height: 185, tailX: 300, tailY: 460 }
+          { type: "bubble", bubbleStyle: "round", tailDir: "left", speaker: "", text: "날씨도 좋은데 가벼운 차림으로\n뒷산 풀밭 산책 다녀와야지!", fontSize: 36, textColor: "#111827", bgColor: "#ffffff", x: 90, width: 900, tailX: 300, tailY: 480 }
         ]
       }
     ]
@@ -236,20 +236,26 @@ function applyScriptToState(scriptObj, isInitial = false) {
 
 function getDefaultTailPoint(b) {
   const dir = b.tailDir || 'bottom';
-  if (dir === 'left') return { tailX: Math.round(b.x + b.width * 0.25), tailY: Math.round(b.y + b.height + 60) };
-  if (dir === 'right') return { tailX: Math.round(b.x + b.width * 0.75), tailY: Math.round(b.y + b.height + 60) };
-  return { tailX: Math.round(b.x + b.width * 0.5), tailY: Math.round(b.y + b.height + 60) };
+  if (dir === 'left') return { tailX: Math.round(b.x + b.width * 0.25), tailY: Math.round(b.y + b.height + 50) };
+  if (dir === 'right') return { tailX: Math.round(b.x + b.width * 0.75), tailY: Math.round(b.y + b.height + 50) };
+  return { tailX: Math.round(b.x + b.width * 0.5), tailY: Math.round(b.y + b.height + 50) };
 }
 
 function normalizeBubbleLayout(b, headerText = '') {
-  const text = String(b.text || '');
-  const lineCount = text.split('\n').length;
-  const fontSize = Number(b.fontSize) || 38;
-  const autoHeight = Math.max(160, lineCount * (fontSize * 1.45) + 65);
+  const text = String(b.text || '\n');
+  const fontSize = Number(b.fontSize) || 36;
+  
+  // 글자 줄 바꿈 수와 글자 길이를 분석해 말풍선 높이(height)와 위치(y)를 완벽하게 자동 계산
+  const lines = text.split('\n');
+  const lineCount = lines.length;
+  
+  // 폰트 크기와 줄 수에 맞춰 말풍선 박스 크기를 넉넉하게 산정 (글자가 밖으로 튀어나가지 않음)
+  const autoHeight = Math.max(210, lineCount * (fontSize * 1.5) + 75);
+  const autoWidth = 900;
 
-  // 상단 자막 줄 수에 따라 y 좌표를 무조건 안전한 위치(2줄일 때 270px)로 자동 계산 강제 적용
+  // 상단 자막 줄 수에 따라 말풍선 시작 위치(y)를 아래로 내려 겹침 원천 방지
   const headerLines = headerText ? headerText.split('\n').length : 1;
-  const safeY = headerLines >= 2 ? 270 : 210;
+  const safeY = headerLines >= 2 ? 280 : 220;
 
   const normalized = {
     type: 'bubble',
@@ -262,8 +268,8 @@ function normalizeBubbleLayout(b, headerText = '') {
     bgColor: b.bgColor || '#ffffff',
     x: typeof b.x === 'number' ? b.x : 90,
     y: safeY,
-    width: typeof b.width === 'number' ? b.width : 900,
-    height: typeof b.height === 'number' ? Math.min(b.height, autoHeight + 30) : autoHeight
+    width: autoWidth,
+    height: autoHeight
   };
 
   if (typeof b.tailX === 'number' && typeof b.tailY === 'number') {
@@ -535,7 +541,7 @@ function drawBubbleLayer(c, item, animState = null) {
     speaker = '',
     bubbleStyle = 'round',
     tailDir = 'bottom',
-    fontSize = 38,
+    fontSize = 36,
     textColor = '#111827',
     bgColor = '#ffffff'
   } = item;
@@ -675,7 +681,7 @@ function drawBubbleLayer(c, item, animState = null) {
   c.font = `900 ${fontSize}px ${fontFamily}`;
   c.textAlign = 'center';
   c.textBaseline = 'middle';
-  const maxLineW = width - 70;
+  const maxLineW = width - 80;
   const rawLines = String(text).split('\n');
   const wrappedLines = [];
   rawLines.forEach(rawLine => {
@@ -1106,7 +1112,7 @@ function syncInspectorWithSelection() {
     document.getElementById('dialogueTextarea').value = item.text || '';
     document.getElementById('bubbleStyleSelect').value = item.bubbleStyle || 'round';
     document.getElementById('bubbleTailSelect').value = item.tailDir || 'custom';
-    document.getElementById('fontSizeInput').value = item.fontSize || 38;
+    document.getElementById('fontSizeInput').value = item.fontSize || 36;
     document.getElementById('textColorInput').value = item.textColor || '#111827';
     document.getElementById('bubbleBgColorInput').value = item.bgColor || '#ffffff';
   } else if (type === 'sticker') {
@@ -1226,11 +1232,11 @@ function bindUIEvents() {
     const cut = appState.cuts[appState.currentCutIndex];
     if (cut) { 
       cut.headerText = e.target.value; 
-      // 상단 자막이 바뀔 때 말풍선 y 좌표도 즉시 자동 재계산
+      const headerLines = cut.headerText ? cut.headerText.split('\n').length : 1;
+      const safeY = headerLines >= 2 ? 280 : 220;
       (cut.items || []).forEach(item => {
         if ((item.type || '').toLowerCase() === 'bubble') {
-          const headerLines = cut.headerText ? cut.headerText.split('\n').length : 1;
-          item.y = headerLines >= 2 ? 270 : 210;
+          item.y = safeY;
         }
       });
       renderAll(); 
@@ -1255,7 +1261,7 @@ function bindUIEvents() {
   document.getElementById('btnAddBubble').addEventListener('click', () => {
     const cut = appState.cuts[appState.currentCutIndex];
     const headerLines = cut.headerText ? cut.headerText.split('\n').length : 1;
-    const safeY = headerLines >= 2 ? 270 : 210;
+    const safeY = headerLines >= 2 ? 280 : 220;
 
     const newBubble = {
       type: 'bubble',
@@ -1263,11 +1269,11 @@ function bindUIEvents() {
       tailDir: 'custom',
       speaker: '',
       text: '새로운 대사를 입력하세요',
-      fontSize: 38,
+      fontSize: 36,
       textColor: '#111827',
       bgColor: '#ffffff',
-      x: 90, y: safeY, width: 900, height: 185,
-      tailX: 540, tailY: 460
+      x: 90, y: safeY, width: 900, height: 210,
+      tailX: 540, tailY: 480
     };
     cut.items.push(newBubble);
     appState.selectedLayerIndex = cut.items.length - 1;
@@ -1359,7 +1365,13 @@ function bindUIEvents() {
   });
   document.getElementById('dialogueTextarea').addEventListener('input', (e) => {
     const item = getSelectedItem();
-    if (item) { item.text = e.target.value; renderAll(); }
+    if (item) { 
+      item.text = e.target.value; 
+      // 대사가 수정되면 말풍선 높이도 글자 줄 수에 맞춰 즉시 자동 확장
+      const lineCount = item.text.split('\n').length;
+      item.height = Math.max(210, lineCount * (item.fontSize * 1.5) + 75);
+      renderAll(); 
+    }
   });
   document.getElementById('bubbleStyleSelect').addEventListener('change', (e) => {
     const item = getSelectedItem();
@@ -1379,7 +1391,12 @@ function bindUIEvents() {
   });
   document.getElementById('fontSizeInput').addEventListener('input', (e) => {
     const item = getSelectedItem();
-    if (item) { item.fontSize = Number(e.target.value) || 38; renderAll(); }
+    if (item) { 
+      item.fontSize = Number(e.target.value) || 36; 
+      const lineCount = (item.text || '').split('\n').length;
+      item.height = Math.max(210, lineCount * (item.fontSize * 1.5) + 75);
+      renderAll(); 
+    }
   });
   document.getElementById('textColorInput').addEventListener('input', (e) => {
     const item = getSelectedItem();
@@ -1649,7 +1666,7 @@ function updateMasterPromptText() {
       "headerText": "상단 해설 자막 (2줄 이내)",
       "footerText": "하단 핵심 요약 자막",
       "items": [
-        { "type": "bubble", "bubbleStyle": "round", "tailDir": "left", "speaker": "", "text": "대사 내용", "fontSize": 38, "textColor": "#111827", "bgColor": "#ffffff", "x": 90, "width": 900, "height": 185, "tailX": 300, "tailY": 460 }
+        { "type": "bubble", "bubbleStyle": "round", "tailDir": "left", "speaker": "", "text": "대사 내용", "fontSize": 36, "textColor": "#111827", "bgColor": "#ffffff", "x": 90, "width": 900, "tailX": 300, "tailY": 480 }
       ]
     }
   ]
@@ -1686,5 +1703,6 @@ function openArtPromptModal() {
   }).join('\n');
 
   document.getElementById('artPromptText').value = header + scenes;
+  document.getElementById('artPropertyModal')?.classList.remove('hidden');
   document.getElementById('artPromptModal').classList.remove('hidden');
 }
