@@ -1,7 +1,8 @@
 /**
- * 인스타그램 10컷 웹툰 자동 제작기 (자유 꼬리 핸들 & 멀티 세계관 에디션)
- * - 말풍선 본체는 고정한 채 노란색 꼬리 끝점(tailX, tailY)만 마우스로 360도 자유 드래그 가능
- * - 동물, 공룡(프테라노돈·티라노), 곤충/조류(나비·부엉이) 등 감염병 특성에 맞는 멀티 세계관 프롬프트 지원
+ * 인스타그램 10컷 웹툰 자동 제작기 (원포인트 스토리툰 + 자유 꼬리 + 멀티 세계관 에디션)
+ * - 1편 = 단 1가지 예방 수칙(One-Point) 집중 스토리텔링 프롬프트 내장
+ * - 말풍선 본체는 고정한 채 노란색 꼬리 끝점(tailX, tailY)만 360도 자유 드래그 가능
+ * - 동물, 공룡(프테라노돈·티라노), 곤충/조류(나비·부엉이) 등 감염병 특성에 맞는 멀티 세계관 지원
  */
 
 const CANVAS_W = 1080;
@@ -93,7 +94,7 @@ function createEmpty10Cuts() {
 
 function getSampleScriptData() {
   return {
-    episodeTitle: "호흡기감염병_기침예절",
+    episodeTitle: "호흡기_1탄_기침예절",
     cuts: [
       {
         background: "bg_office.png",
@@ -104,7 +105,7 @@ function getSampleScriptData() {
         captionStyle: "outline",
         captionSize: 50,
         headerText: "밀폐된 공간에서 맨입으로 재채기?\n비말이 최대 6m까지 날아갑니다!",
-        footerText: "호흡기 감염병 예방의 핵심, 올바른 기침 예절 편",
+        footerText: "호흡기 감염병 예방 1탄: 올바른 기침 예절",
         items: [
           { type: "bubble", bubbleStyle: "sfx", tailDir: "none", speaker: "", text: "잠깐 스톱!!", fontSize: 50, textColor: "#111827", bgColor: "#fde047", x: 340, y: 185, width: 400, height: 165 }
         ]
@@ -118,7 +119,7 @@ function getSampleScriptData() {
         captionStyle: "outline",
         captionSize: 46,
         headerText: "기침이 나올 때 무심코\n손바닥으로 입을 가리시나요?",
-        footerText: "손에 묻은 바이러스가 문손잡이와 스마트폰으로 옮겨갑니다",
+        footerText: "",
         items: [
           { type: "bubble", bubbleStyle: "round", tailDir: "left", speaker: "", text: "콜록콜록! 손으로 가렸으니\n괜찮겠지?", fontSize: 40, textColor: "#111827", bgColor: "#ffffff", x: 90, y: 185, width: 520, height: 195 }
         ]
@@ -303,7 +304,6 @@ function normalizeBubbleLayout(b) {
     height: typeof b.height === 'number' ? Math.min(b.height, autoHeight + 25) : autoHeight
   };
 
-  // 자유 드래그용 꼬리 끝 좌표(tailX, tailY) 세팅
   if (typeof b.tailX === 'number' && typeof b.tailY === 'number') {
     normalized.tailX = b.tailX;
     normalized.tailY = b.tailY;
@@ -555,7 +555,6 @@ function drawStickerLayer(c, item) {
   c.restore();
 }
 
-// 360도 자유 꼬리 말풍선 렌더링
 function drawBubbleLayer(c, item) {
   const {
     x, y, width, height,
@@ -568,7 +567,6 @@ function drawBubbleLayer(c, item) {
     bgColor = '#ffffff'
   } = item;
 
-  // 꼬리 끝 좌표 보장
   if (typeof item.tailX !== 'number' || typeof item.tailY !== 'number') {
     const pt = getDefaultTailPoint(item);
     item.tailX = pt.tailX;
@@ -618,7 +616,6 @@ function drawBubbleLayer(c, item) {
     c.lineWidth = 7;
 
     if (tailDir !== 'none') {
-      // 말풍선 중심에서 꼬리 끝점(tx, ty) 방향으로 동그란 생각 방울 2개 배치
       const dx = tx - cx;
       const dy = ty - cy;
       c.beginPath(); c.arc(cx + dx * 0.68, cy + dy * 0.68, 15, 0, Math.PI * 2); c.fill(); c.stroke();
@@ -630,13 +627,11 @@ function drawBubbleLayer(c, item) {
     c.fill();
     c.stroke();
   } else {
-    // 일반 말풍선 (round / shout / title) + 360도 자유 꼬리
     const showTail = (tailDir !== 'none' && bubbleStyle !== 'title');
     const angle = Math.atan2(ty - cy, tx - cx);
     const perpAngle = angle + Math.PI / 2;
     const baseHalfW = 24;
 
-    // 꼬리 밑변 두 점 (말풍선 중심 부근에서 시작)
     const b1x = cx + Math.cos(perpAngle) * baseHalfW;
     const b1y = cy + Math.sin(perpAngle) * baseHalfW;
     const b2x = cx - Math.cos(perpAngle) * baseHalfW;
@@ -647,7 +642,6 @@ function drawBubbleLayer(c, item) {
     c.lineWidth = 7;
     c.lineJoin = 'round';
 
-    // 1) 꼬리 외곽선 먼저 그리기
     if (showTail) {
       c.beginPath();
       c.moveTo(b1x, b1y);
@@ -658,14 +652,12 @@ function drawBubbleLayer(c, item) {
       c.stroke();
     }
 
-    // 2) 말풍선 본체 그리기 (외곽선 포함)
     c.beginPath();
     if (bubbleStyle === 'title') c.roundRect(x, y, width, height, 24);
     else c.ellipse(cx, cy, width * 0.49, height * 0.48, 0, 0, Math.PI * 2);
     c.fill();
     c.stroke();
 
-    // 3) 본체와 꼬리 경계선만 깔끔하게 지워서 하나로 이어진 말풍선 모양 완성
     if (showTail) {
       c.save();
       c.beginPath();
@@ -684,7 +676,6 @@ function drawBubbleLayer(c, item) {
     }
   }
 
-  // 화자 이름표 (입력된 경우에만)
   if (speaker && speaker.trim() !== '') {
     c.font = '700 26px "Noto Sans KR", sans-serif';
     const tagW = c.measureText(speaker).width + 38;
@@ -698,7 +689,6 @@ function drawBubbleLayer(c, item) {
     c.fillText(speaker, x + 36 + tagW / 2, y + 1);
   }
 
-  // 대사 텍스트 줄바꿈 및 렌더링
   c.fillStyle = textColor;
   const fontFamily = bubbleStyle === 'sfx' ? '"Black Han Sans", "Noto Sans KR", sans-serif' : '"Noto Sans KR", sans-serif';
   c.font = `900 ${fontSize}px ${fontFamily}`;
@@ -751,7 +741,6 @@ function renderCutToContext(targetCtx, cutIndex, showSelection = false) {
   drawStoryCaptions(targetCtx, cut, cutIndex + 1, appState.cuts.length);
 }
 
-// 선택 박스 + 노란색 꼬리 끝점 핸들 그리기
 function drawSelectionBox(c, item) {
   c.save();
   c.strokeStyle = '#3b82f6';
@@ -776,7 +765,6 @@ function drawSelectionBox(c, item) {
     c.stroke();
   });
 
-  // 말풍선이고 꼬리가 켜져 있으면 꼬리 끝점에 노란색 드래그 핸들 표시
   if ((item.type || '').toLowerCase() === 'bubble' && item.tailDir !== 'none' && item.bubbleStyle !== 'title' && item.bubbleStyle !== 'sfx' && item.bubbleStyle !== 'plain') {
     const tx = item.tailX;
     const ty = item.tailY;
@@ -870,13 +858,11 @@ function getCanvasMousePos(e) {
 }
 
 function hitTestHandle(pos, item) {
-  // 1) 노란색 꼬리 끝점 우선 판정
   if ((item.type || '').toLowerCase() === 'bubble' && item.tailDir !== 'none' && typeof item.tailX === 'number') {
     const dist = Math.hypot(pos.x - item.tailX, pos.y - item.tailY);
     if (dist <= 30) return 'tail';
   }
 
-  // 2) 4개 모서리 리사이즈 핸들 판정
   const r = HANDLE_SIZE;
   const corners = {
     'resize-nw': [item.x, item.y],
@@ -959,7 +945,6 @@ function bindCanvasMouseEvents() {
     const b = dragState.initialBox;
 
     if (dragState.mode === 'tail') {
-      // 말풍선 본체는 가만히 두고 꼬리 끝 좌표만 자유롭게 이동
       item.tailX = Math.round(pos.x);
       item.tailY = Math.round(pos.y);
       item.tailDir = 'custom';
@@ -1298,7 +1283,6 @@ function bindUIEvents() {
     if (item) { item.stickerId = e.target.value; renderAll(); }
   });
 
-  // 세계관 프리셋 변경 시 모달 프롬프트 즉시 갱신
   document.getElementById('castPresetSelect').addEventListener('change', (e) => {
     appState.worldPreset = e.target.value;
     updateMasterPromptText();
@@ -1315,7 +1299,7 @@ function bindUIEvents() {
     const textarea = document.getElementById('masterPromptText');
     textarea.select();
     navigator.clipboard.writeText(textarea.value);
-    alert('선택한 세계관이 반영된 대본 프롬프트가 복사되었습니다!');
+    alert('원포인트 스토리툰 대본 프롬프트가 복사되었습니다!');
   });
 
   document.getElementById('btnOpenArtPromptModal').addEventListener('click', openArtPromptModal);
@@ -1407,53 +1391,56 @@ async function downloadAllCutsZip() {
 }
 
 // ============================================================================
-// 8. 멀티 세계관 대본 & 작화 프롬프트 생성기
+// 8. 원포인트 스토리툰 대본 & 작화 프롬프트 생성기
 // ============================================================================
 function updateMasterPromptText() {
   const preset = WORLD_PRESETS[appState.worldPreset] || WORLD_PRESETS.mammal;
 
-  const prompt = `너는 공공기관 인스타그램의 '감염병 예방 10컷 사연툰' 전담 스토리 작가야.
-내가 아래에 전달하는 [감염병 지침 내용]과 [원하는 주제]를 바탕으로 몰입감 있는 10컷 웹툰 시나리오를 순수 JSON 형식으로 작성해 줘.
+  const prompt = `너는 공공기관 인스타그램의 '감염병 예방 10컷 스토리툰' 전담 작가야.
+내가 아래에 전달하는 [감염병 지침] 중에서 **오직 내가 지정한 [이번 편 핵심 주제(단 1가지)]만 집중적으로 다루는** 10컷 스토리툰 시나리오를 순수 JSON 형식으로 작성해 줘.
+
+[가장 중요한 스토리 전개 원칙 — 원포인트 집중]
+- 지침에 여러 예방 수칙이 있더라도 절대 한 편에 다 우겨넣지 마!
+- 오직 지정된 **단 1가지 수칙**만 가지고, 독자가 실제 만화를 보듯 감정선과 사건이 자연스럽게 이어지도록 10컷의 호흡을 길게 가져가 줘.
+  * 1~2컷 (일상/도입): 평범한 일상 상황과 캐릭터의 성격·행동 묘사
+  * 3~4컷 (실수/위기): 그 한 가지 수칙을 지키지 않아서 생기는 아찔하거나 당황스러운 상황
+  * 5~6컷 (전환/등장): 연구원(박사) 등장 및 왜 이 행동이 위험한지 쉬운 원리 설명
+  * 7~9컷 (해결/실천): 해당 수칙을 올바르게 실천하는 과정과 변화된 모습
+  * 10컷 (여운/다음 편 예고): 깔끔한 마무리 한 줄 및 다음 편 시리즈 예고
 
 [이번 에피소드 등장인물 설정: ${preset.name}]
   ${preset.desc}
-(※ 만약 내가 아래 요청에서 특정 캐릭터나 빌런을 별도로 지정하면 그 캐릭터를 우선 반영해 줘.)
 
-[작성 규칙]
+[JSON 작성 규칙]
 1. 반드시 순수 JSON 코드만 출력해 (설명 생략).
-2. "episodeTitle"에는 파일 저장용 제목(예: "호흡기감염병_기침예절", "생물테러_대응수칙")을 언더바(_)로 넣어 줘.
-3. "cuts" 배열에는 정확히 10개의 컷을 구성해:
-   - "scenePrompt": 제미나이 이미지 AI가 그릴 장면 묘사. 등장인물의 의상과 좌우 위치를 명확히 적고, 화면 중앙~하단부에 배치되도록 묘사해.
-   - "headerText": 화면 상단 사연 내레이션 자막 (2줄 이내 \\n)
-   - "footerText": 화면 하단 보조 내레이션 자막 (1줄)
-   - "darkMood" (true/false): 위기·테러·불안 장면일 때 true
-   - "speedLines" (true/false): 충격·경고 장면일 때 true
-   - "items": 말풍선 배열 (y는 175~210 사이, height는 185~210 사이로 상단 여백에만 배치, speaker는 빈 문자열 "" 유지).
+2. "episodeTitle"에는 파일 저장용 제목(예: "진드기_1탄_옷차림편", "호흡기_1탄_기침예절")을 언더바(_)로 넣어 줘.
+3. 상단 자막("headerText"), 말풍선("text"), 하단 자막("footerText")에 같은 내용을 중복해서 적지 말고 역할을 분리해 줘 (자막은 상황 해설, 말풍선은 캐릭터의 생생한 대사/감정 표현).
+4. "items" 말풍선 좌표: 캐릭터 얼굴을 가리지 않도록 y는 175~210 사이, height는 185~210 사이로 상단 여백에만 배치하고 "speaker"는 빈 문자열 ""로 비워 둬.
 
 [JSON 출력 양식 예시]
 {
-  "episodeTitle": "감염병명_주제",
+  "episodeTitle": "감염병명_1탄_단일주제",
   "cuts": [
     {
       "background": "bg_empty.png",
-      "scenePrompt": "등장인물 동작 및 좌우 위치 묘사",
+      "scenePrompt": "등장인물 동작 및 좌우 위치 묘사 (화면 중앙~하단부 배치)",
       "blurBg": false,
       "darkMood": false,
       "speedLines": false,
       "captionStyle": "outline",
       "captionSize": 46,
-      "headerText": "상단 내레이션 자막 첫 줄\\n두 번째 줄",
-      "footerText": "하단 보조 자막 한 줄",
+      "headerText": "상황 해설 내레이션 (2줄 이내\\n작성)",
+      "footerText": "",
       "items": [
-        { "type": "bubble", "bubbleStyle": "round", "tailDir": "left", "speaker": "", "text": "말풍선 대사 내용!\\n두 줄 이내로 작성", "fontSize": 40, "textColor": "#111827", "bgColor": "#ffffff", "x": 100, "y": 180, "width": 520, "height": 195 }
+        { "type": "bubble", "bubbleStyle": "round", "tailDir": "left", "speaker": "", "text": "캐릭터의 자연스러운 대사!", "fontSize": 40, "textColor": "#111827", "bgColor": "#ffffff", "x": 100, "y": 180, "width": 520, "height": 195 }
       ]
     }
   ]
 }
 
 ---
-[내가 요청할 감염병 지침 및 이번 편 주제]:
-(여기에 지침 내용이나 주제를 적어주세요)`;
+[이번 편에서 다룰 단 1가지 핵심 주제 및 참고 지침]:
+(예: 진드기 예방 수칙 중 '1탄: 야외활동 시 밝은색 긴옷 입기' 한 가지만 다뤄줘 / 참고 지침: ...)`;
 
   document.getElementById('masterPromptText').value = prompt;
 }
