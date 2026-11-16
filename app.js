@@ -1,6 +1,6 @@
 /**
  * 인스타그램 10컷 웹툰 자동 제작기 (원포인트 스토리툰 + 자유 꼬리 + 멀티 세계관 + 자동 시퀀스 MP4 에디션)
- * - 상단 자막과 말풍선 겹침 방지 오토 레이아웃 및 2단계 작화 구도 자동 연동 보완
+ * - 상단 자막과 말풍선 겹침 방지 오토 레이아웃(2줄 이상 시 y좌표 260px 자동 강제 하향) 반영 버전
  */
 
 const CANVAS_W = 1080;
@@ -41,11 +41,11 @@ const WORLD_PRESETS = {
   },
   aquatic: {
     name: '물가·수생 생물 (수인성/모기 유충 테마)',
-    desc: '1) 연구원: 흰색 연구원 가운을 입은 부지런한 수달 박사.\n  2) 시민: 초록 청개구리 캐릭터.'
+    desc: '1) 연구원: 흰색 실험실 가운을 입은 부지런한 수달 박사.\n  2) 시민: 초록 청개구리 캐릭터.'
   },
   insect: {
     name: '곤충·절지동물 월드 (매개체 테마)',
-    desc: '1) 연구원: 흰색 연구원 가운을 입은 사마귀 박사.\n  2) 시민: 동글동글한 무당벌레 캐릭터.'
+    desc: '1) 연구원: 흰색 실험실 가운을 입은 사마귀 박사.\n  2) 시민: 동글동글한 무당벌레 캐릭터.'
   }
 };
 
@@ -103,7 +103,7 @@ function getSampleScriptData() {
         headerText: "선명한 바람이 부는 주말,\n토끼 시민의 설레는 산책 준비!",
         footerText: "야외활동 전 필수 수칙 1탄: 밝은색 긴옷 착용",
         items: [
-          { type: "bubble", bubbleStyle: "round", tailDir: "left", speaker: "", text: "날씨도 좋은데 가벼운 차림으로\n뒷산 풀밭 산책 다녀와야지!", fontSize: 38, textColor: "#111827", bgColor: "#ffffff", x: 90, y: 220, width: 500, height: 185, tailX: 300, tailY: 460 }
+          { type: "bubble", bubbleStyle: "round", tailDir: "left", speaker: "", text: "날씨도 좋은데 가벼운 차림으로\n뒷산 풀밭 산책 다녀와야지!", fontSize: 38, textColor: "#111827", bgColor: "#ffffff", x: 90, y: 260, width: 900, height: 185, tailX: 300, tailY: 460 }
         ]
       }
     ]
@@ -247,9 +247,9 @@ function normalizeBubbleLayout(b, headerText = '') {
   const fontSize = Number(b.fontSize) || 38;
   const autoHeight = Math.max(160, lineCount * (fontSize * 1.45) + 65);
 
-  // 상단 자막 줄바꿈 수에 맞춰 말풍선이 겹치지 않도록 기본 Y축 자동 회피 계산
+  // 상단 자막이 2줄 이상이면 260px로 강제 하향하여 겹침 방지
   const headerLines = headerText ? headerText.split('\n').length : 1;
-  const safeDefaultY = headerLines >= 2 ? 230 : 200;
+  const forcedSafeY = headerLines >= 2 ? 260 : 210;
 
   const normalized = {
     type: 'bubble',
@@ -261,7 +261,7 @@ function normalizeBubbleLayout(b, headerText = '') {
     textColor: b.textColor || '#111827',
     bgColor: b.bgColor || '#ffffff',
     x: typeof b.x === 'number' ? b.x : 90,
-    y: typeof b.y === 'number' ? Math.max(safeDefaultY, b.y) : safeDefaultY,
+    y: forcedSafeY,
     width: typeof b.width === 'number' ? b.width : 900,
     height: typeof b.height === 'number' ? Math.min(b.height, autoHeight + 30) : autoHeight
   };
@@ -1253,7 +1253,7 @@ function bindUIEvents() {
       fontSize: 38,
       textColor: '#111827',
       bgColor: '#ffffff',
-      x: 90, y: 220, width: 900, height: 185,
+      x: 90, y: 260, width: 900, height: 185,
       tailX: 540, tailY: 460
     };
     cut.items.push(newBubble);
@@ -1285,7 +1285,6 @@ function bindUIEvents() {
     if (item) { item.flipX = !item.flipX; renderAll(); }
   });
 
-  // 말풍선 위치 좌우 반전(스왑) 버튼 추가 핸들러
   const commonCtrl = document.getElementById('commonLayerControls');
   if (commonCtrl && !document.getElementById('btnMirrorBubble')) {
     const btnRow = commonCtrl.querySelector('.btn-row-4');
@@ -1620,7 +1619,7 @@ function updateMasterPromptText() {
 [JSON 작성 규칙]
 1. 반드시 순수 JSON 코드만 출력해.
 2. "episodeTitle"에는 파일 저장용 이름(예: "진드기_1탄_옷차림편")을 넣어 줘.
-3. "scenePrompt" 작성 시, 각 컷의 대화 성격에 맞춰 캐릭터가 **화면 왼쪽**에 위치하는지 혹은 **화면 오른쪽**에 위치하는지를 명시해 줘 (예: "토끼 시민이 왼쪽에 서서 고민하고, 호랑이 박사가 오른쪽에 다가오는 모습").
+3. "scenePrompt" 작성 시, 각 컷의 대화 성격에 맞춰 캐릭터가 **화면 왼쪽**에 위치하는지 혹은 **화면 오른쪽**에 위치하는지를 명시해 줘.
 
 [JSON 출력 양식]
 {
@@ -1637,7 +1636,7 @@ function updateMasterPromptText() {
       "headerText": "상단 해설 자막 (2줄 이내)",
       "footerText": "하단 핵심 요약 자막",
       "items": [
-        { "type": "bubble", "bubbleStyle": "round", "tailDir": "left", "speaker": "", "text": "대사 내용", "fontSize": 38, "textColor": "#111827", "bgColor": "#ffffff", "x": 90, "y": 220, "width": 900, "height": 185, "tailX": 300, "tailY": 460 }
+        { "type": "bubble", "bubbleStyle": "round", "tailDir": "left", "speaker": "", "text": "대사 내용", "fontSize": 38, "textColor": "#111827", "bgColor": "#ffffff", "x": 90, "y": 260, "width": 900, "height": 185, "tailX": 300, "tailY": 460 }
       ]
     }
   ]
@@ -1662,7 +1661,6 @@ function openArtPromptModal() {
 아래 1번부터 10번까지 한 컷씩 그려줘:
 =========================================\n\n`;
 
-  // 2단계 작화 프롬프트 뽑을 때 각 컷의 말풍선 x 좌표를 분석해 캐릭터 좌/우 배치를 AI에게 자동으로 지시
   const scenes = appState.cuts.map((cut, idx) => {
     const desc = cut.scenePrompt || cut.headerText || '장면 설명';
     const firstBubble = (cut.items || []).find(it => (it.type || '').toLowerCase() === 'bubble');
