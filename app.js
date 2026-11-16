@@ -1,11 +1,14 @@
 /**
- * 인스타그램 10컷 웹툰 자동 제작기
- * (원포인트 스토리툰 + 자유 꼬리 + 멀티 세계관 + 실행취소(Undo) + 저작권 프리 BGM & 토끼/호랑이 대화 보이스 MP4 에디션)
+ * 인스타그램 웹툰 & 릴스 자동 제작기
+ * - 자동 표지(1컷) + 본문(2~11컷) 총 11장 구성
+ * - 표지 불투명 오버레이 & 경상남도 감염병관리지원단 로고(표지 + 마지막 컷 하단) 자동 배치
+ * - 저작권 프리 BGM & 토끼/호랑이 대화 보이스 MP4 인코딩 + 실행취소(Undo) 포함
  */
 
 const CANVAS_W = 1080;
 const CANVAS_H = 1350;
 const HANDLE_SIZE = 24;
+const ORG_NAME_DEFAULT = '경상남도 감염병관리지원단';
 
 const DEFAULT_ASSETS = {
   backgrounds: [
@@ -50,9 +53,10 @@ const WORLD_PRESETS = {
 };
 
 let loadedImages = {};
+let orgLogoImage = null; // 경상남도 감염병관리지원단 로고 이미지 객체
 
 let appState = {
-  episodeTitle: '새_에피소드',
+  episodeTitle: '진드기_1탄_옷차림편',
   worldPreset: 'mammal',
   currentCutIndex: 0,
   selectedLayerIndex: -1,
@@ -60,12 +64,10 @@ let appState = {
   cuts: [],
   audioOptions: {
     enableBgm: true,
-    enableVoice: true,
-    voiceStyle: 'tts_with_animal' // 'tts_with_animal' | 'animal_only'
+    enableVoice: true
   }
 };
 
-// 실행 취소(Undo) / 다시 실행(Redo) 히스토리 스택
 const MAX_HISTORY = 30;
 let undoStack = [];
 let redoStack = [];
@@ -86,7 +88,94 @@ const mainCanvas = document.getElementById('mainCanvas');
 const ctx = mainCanvas.getContext('2d');
 
 // ============================================================================
-// 0. 실행 취소(Undo) / 다시 실행(Redo) & 오디오 설정 툴바 주입
+// 0. 지원단 로고 저장/불러오기 & 표지(Cover) 자동 생성 헬퍼
+// ============================================================================
+function loadSavedOrgLogo() {
+  const savedLogoDataUrl = localStorage.getItem('webtoon_org_logo_dataurl');
+  if (savedLogoDataUrl) {
+    const img = new Image();
+    img.onload = () => {
+      orgLogoImage = img;
+      renderAll();
+    };
+    img.src = savedLogoDataUrl;
+  }
+}
+
+function handleOrgLogoUpload(e) {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const dataUrl = ev.target.result;
+    const img = new Image();
+    img.onload = () => {
+      orgLogoImage = img;
+      try {
+        localStorage.setItem('webtoon_org_logo_dataurl', dataUrl);
+      } catch (err) {
+        console.warn('로고 로컬 저장 용량 초과:', err);
+      }
+      renderAll();
+      alert('경상남도 감염병관리지원단 로고가 등록되었습니다!\n표지(1컷)와 마지막 컷 하단에 자동 표시됩니다.');
+    };
+    img.src = dataUrl;
+  };
+  reader.readAsDataURL(file);
+  e.target.value = '';
+}
+
+function formatEpisodeDisplayTitle(rawTitle) {
+  const cleaned = String(rawTitle || '감염병 예방 웹툰').replace(/_/g, ' ').trim();
+  // 제목이 길면 자연스럽게 2줄로 분할
+  if (cleaned.length > 14 && !cleaned.includes('\n')) {
+    const mid = Math.floor(cleaned.length / 2);
+    const spaceIdx = cleaned.indexOf(' ', mid - 3);
+    if (spaceIdx > 0 && spaceIdx < cleaned.length - 2) {
+      return cleaned.slice(0, spaceIdx) + '\n' + cleaned.slice(spaceIdx + 1);
+    }
+  }
+  return cleaned;
+}
+
+function createCoverCutObject(episodeTitle, firstBodyBg = 'bg_forest.png', firstHeader = '') {
+  return {
+    isCover: true,
+    background: firstBodyBg,
+    scenePrompt: '',
+    blurBg: true,
+    darkMood: true,
+    speedLines: false,
+    showBottomLogo: false,
+    captionStyle: 'outline',
+    captionSize: 64,
+    headerText: formatEpisodeDisplayTitle(episodeTitle),
+    footerText: firstHeader ? firstHeader.replace(/\n/g, ' ') : '알아두면 쓸모 있는 감염병 예방 인스타툰',
+    items: []
+  };
+}
+
+function ensureCoverAndEndLogo(cuts, episodeTitle) {
+  let result = [...cuts];
+  const firstBg = result[0]?.background || 'bg_empty.png';
+  const firstHeader = result[0]?.headerText || '';
+
+  // 맨 앞에 표지가 없으면 자동 삽입 (총 10컷 -> 11컷)
+  if (result.length === 0 || !result[0].isCover) {
+    result.unshift(createCoverCutObject(episodeTitle, firstBg, firstHeader));
+  }
+
+  // 마지막 컷(11번째 컷)에는 하단 지원단 로고 자동 활성화
+  result.forEach((c, idx) => {
+    if (!c.isCover) {
+      c.showBottomLogo = (idx === result.length - 1);
+    }
+  });
+  return result;
+}
+
+// ============================================================================
+// 0-1. 실행 취소(Undo) / 다시 실행(Redo) & 오디오 옵션 툴바
 // ============================================================================
 function saveHistorySnapshot() {
   if (isRestoringHistory) return;
@@ -205,18 +294,17 @@ function injectToolbarEnhancements() {
     updateUndoRedoButtons();
   }
 
-  // 상단 내보내기 바에 오디오 옵션 토글 주입
   const exportBar = document.querySelector('.export-bar');
   if (exportBar && !document.getElementById('audioOptionBox')) {
     const box = document.createElement('div');
     box.id = 'audioOptionBox';
-    box.style.cssText = 'display:flex; align-items:center; gap:8px; background:rgba(15,23,42,0.7); border:1px solid #334155; padding:4px 10px; border-radius:6px; font-size:12px; color:#e2e8f0;';
+    box.style.cssText = 'display:flex; align-items:center; gap:6px; background:rgba(15,23,42,0.7); border:1px solid #334155; padding:4px 8px; border-radius:6px; font-size:11px; color:#e2e8f0;';
     box.innerHTML = `
-      <label style="display:flex; align-items:center; gap:4px; cursor:pointer;" title="저작권 걱정 없는 잔잔한 자체 작곡 BGM 포함">
-        <input type="checkbox" id="chkEnableBgm" checked> 🎵 잔잔한BGM
+      <label style="display:flex; align-items:center; gap:3px; cursor:pointer;" title="저작권 걱정 없는 잔잔한 자체 작곡 BGM 포함">
+        <input type="checkbox" id="chkEnableBgm" checked> 🎵BGM
       </label>
-      <label style="display:flex; align-items:center; gap:4px; cursor:pointer;" title="토끼(높은 톤)·호랑이(낮은 톤) 말풍선 대화 보이스 포함">
-        <input type="checkbox" id="chkEnableVoice" checked> 🗣️ 대화목소리
+      <label style="display:flex; align-items:center; gap:3px; cursor:pointer;" title="토끼(높은 톤)·호랑이(낮은 톤) 말풍선 대화 보이스 포함">
+        <input type="checkbox" id="chkEnableVoice" checked> 🗣️목소리
       </label>
     `;
     const mp4Btn = document.getElementById('btnDownloadMp4');
@@ -233,43 +321,31 @@ function injectToolbarEnhancements() {
 }
 
 // ============================================================================
-// 0-2. 화자 자동 판별 (토끼 시민 vs 호랑이 박사) 및 Web Audio BGM·보이스 엔진
+// 0-2. 화자 자동 판별 및 Web Audio BGM·보이스 엔진
 // ============================================================================
 function detectBubbleSpeakerRole(bubble, cut) {
   const speaker = (bubble.speaker || '').trim();
   const text = (bubble.text || '').trim();
   const scene = (cut?.scenePrompt || '') + ' ' + (cut?.headerText || '');
 
-  // 1. 화자 이름표 명시 시 우선 판별
   if (speaker.includes('호랑이') || speaker.includes('박사') || speaker.includes('연구원') || speaker.includes('부엉이') || speaker.includes('티라노') || speaker.includes('수달') || speaker.includes('사마귀')) {
-    return 'doctor'; // 낮고 듬직한 연구원 톤
-  }
-  if (speaker.includes('토끼') || speaker.includes('시민') || speaker.includes('나비') || speaker.includes('아기')) {
-    return 'citizen'; // 높고 발랄한 시민 톤
-  }
-
-  // 2. 대사 어투 및 설명형 전문 용어 기반 판별
-  const doctorKeywords = ['위험해요', '막아야', '보이죠', '줄일 수 있답니다', '알려드릴게요', '예방', '비말', '침투', '식별', '수칙', '잠깐!'];
-  if (doctorKeywords.some(kw => text.includes(kw))) {
     return 'doctor';
   }
-
-  const citizenKeywords = ['다녀와야지', '최고야', '풀잎인가', '안 보여', '정답이었네요', '보이네', '으악', '우와', '아하', '앗,'];
-  if (citizenKeywords.some(kw => text.includes(kw))) {
+  if (speaker.includes('토끼') || speaker.includes('시민') || speaker.includes('나비') || speaker.includes('아기')) {
     return 'citizen';
   }
 
-  // 3. 꼬리 위치 기반 (보통 오른쪽에 박사, 왼쪽에 시민이 서는 구도 반영)
-  if (typeof bubble.tailX === 'number' && bubble.tailX > CANVAS_W * 0.58) {
-    return 'doctor';
-  }
-  if (scene.includes('박사') && !scene.includes('토끼') && !scene.includes('시민')) {
-    return 'doctor';
-  }
+  const doctorKeywords = ['위험해요', '막아야', '보이죠', '줄일 수 있답니다', '알려드릴게요', '예방', '비말', '침투', '식별', '수칙', '잠깐!'];
+  if (doctorKeywords.some(kw => text.includes(kw))) return 'doctor';
+
+  const citizenKeywords = ['다녀와야지', '최고야', '풀잎인가', '안 보여', '정답이었네요', '보이네', '으악', '우와', '아하', '앗,'];
+  if (citizenKeywords.some(kw => text.includes(kw))) return 'citizen';
+
+  if (typeof bubble.tailX === 'number' && bubble.tailX > CANVAS_W * 0.58) return 'doctor';
+  if (scene.includes('박사') && !scene.includes('토끼') && !scene.includes('시민')) return 'doctor';
   return 'citizen';
 }
 
-// 한국어 TTS 음성 재생 (미리보기 및 시스템 오디오 캡처 지원)
 function speakBubbleTextTTS(text, role) {
   if (!('speechSynthesis' in window)) return;
   try {
@@ -282,12 +358,10 @@ function speakBubbleTextTTS(text, role) {
     const voices = window.speechSynthesis.getVoices().filter(v => v.lang.includes('ko'));
 
     if (role === 'doctor') {
-      // 호랑이 박사: 차분하고 듬직한 중저음 톤
       utter.pitch = 0.82;
       utter.rate = 1.05;
       if (voices.length > 1) utter.voice = voices[voices.length - 1];
     } else {
-      // 토끼 시민: 밝고 경쾌한 하이톤
       utter.pitch = 1.32;
       utter.rate = 1.12;
       if (voices.length > 0) utter.voice = voices[0];
@@ -298,7 +372,6 @@ function speakBubbleTextTTS(text, role) {
   }
 }
 
-// Web Audio API 기반 저작권 프리 잔잔한 BGM + 귀여운 캐릭터 대화 음성 합성기
 class WebtoonAudioEngine {
   constructor() {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -316,15 +389,13 @@ class WebtoonAudioEngine {
     return this.dest.stream;
   }
 
-  // 잔잔하고 따뜻한 로파이/오르골풍 아르페지오 BGM 루프 (완전 자체 합성 - 저작권 0%)
   startGentleBgm() {
     if (this.isStopped) return;
-    // Cmaj7 - Am7 - Fmaj7 - G6 따뜻하고 평화로운 코드 진행 (Hz)
     const chords = [
-      [261.63, 329.63, 392.00, 493.88], // Cmaj7
-      [220.00, 261.63, 329.63, 392.00], // Am7
-      [174.61, 220.00, 261.63, 329.63], // Fmaj7
-      [196.00, 246.94, 293.66, 329.63]  // G6
+      [261.63, 329.63, 392.00, 493.88],
+      [220.00, 261.63, 329.63, 392.00],
+      [174.61, 220.00, 261.63, 329.63],
+      [196.00, 246.94, 293.66, 329.63]
     ];
     let step = 0;
 
@@ -340,7 +411,6 @@ class WebtoonAudioEngine {
       osc.type = 'sine';
       osc.frequency.setValueAtTime(freq, now);
 
-      // 부드러운 오르골 엔벨로프 (작고 잔잔한 볼륨: 0.045)
       gain.gain.setValueAtTime(0.0001, now);
       gain.gain.exponentialRampToValueAtTime(0.045, now + 0.06);
       gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.1);
@@ -350,7 +420,6 @@ class WebtoonAudioEngine {
       osc.start(now);
       osc.stop(now + 1.15);
 
-      // 매 마디 첫 박자에 따뜻한 저음 베이스 추가
       if (noteIdx === 0) {
         const bassOsc = this.ctx.createOscillator();
         const bassGain = this.ctx.createGain();
@@ -372,14 +441,12 @@ class WebtoonAudioEngine {
     playNote();
   }
 
-  // 말풍선 대사 글자 수와 화자(토끼 vs 호랑이)에 맞춰 귀여운 캐릭터 대화음 합성 (MP4 트랙에 직접 녹음됨)
   playCharacterDialogueVoice(text, role) {
     if (this.isStopped) return;
     const cleanText = String(text || '').replace(/\s+/g, '');
     const syllableCount = Math.min(18, Math.max(4, Math.ceil(cleanText.length * 0.65)));
     const now = this.ctx.currentTime;
 
-    // 토끼 시민(높고 귀여운 톤: 420~560Hz) vs 호랑이 박사(낮고 듬직한 톤: 175~240Hz)
     const baseFreq = role === 'doctor' ? 190 : 460;
     const interval = role === 'doctor' ? 0.095 : 0.078;
 
@@ -427,18 +494,21 @@ class WebtoonAudioEngine {
 // 1. 빈 워크스페이스 & 샘플 대본 데이터
 // ============================================================================
 function createEmpty10Cuts() {
-  return Array.from({ length: 10 }, (_, idx) => ({
+  const bodyCuts = Array.from({ length: 10 }, (_, idx) => ({
+    isCover: false,
     background: 'bg_empty.png',
     scenePrompt: `${idx + 1}번째 컷 장면을 입력하세요`,
     blurBg: false,
     darkMood: false,
     speedLines: false,
+    showBottomLogo: idx === 9,
     captionStyle: 'outline',
     captionSize: 46,
     headerText: '',
     footerText: '',
     items: []
   }));
+  return ensureCoverAndEndLogo(bodyCuts, '새_에피소드');
 }
 
 function getSampleScriptData() {
@@ -465,6 +535,7 @@ function getSampleScriptData() {
 
 window.addEventListener('DOMContentLoaded', () => {
   injectToolbarEnhancements();
+  loadSavedOrgLogo();
   if ('speechSynthesis' in window) {
     window.speechSynthesis.getVoices();
   }
@@ -557,12 +628,11 @@ function applyScriptToState(scriptObj, isInitial = false) {
     DEFAULT_ASSETS.backgrounds = DEFAULT_ASSETS.backgrounds.filter(b => !b.id.startsWith('ai_scene_'));
   }
 
-  if (scriptObj.episodeTitle) {
-    appState.episodeTitle = scriptObj.episodeTitle;
-    document.getElementById('episodeTitleInput').value = scriptObj.episodeTitle;
-  }
+  const epTitle = scriptObj.episodeTitle || document.getElementById('episodeTitleInput').value.trim() || '새_에피소드';
+  appState.episodeTitle = epTitle;
+  document.getElementById('episodeTitleInput').value = epTitle;
 
-  appState.cuts = scriptObj.cuts.map((rawCut) => {
+  const parsedCuts = scriptObj.cuts.map((rawCut) => {
     const cleanItems = (rawCut.items || [])
       .filter(it => (it.type || '').toLowerCase() !== 'character')
       .map(it => {
@@ -573,11 +643,13 @@ function applyScriptToState(scriptObj, isInitial = false) {
       });
 
     return {
+      isCover: Boolean(rawCut.isCover),
       background: rawCut.background || 'bg_empty.png',
       scenePrompt: rawCut.scenePrompt || '',
       blurBg: Boolean(rawCut.blurBg),
       darkMood: Boolean(rawCut.darkMood),
       speedLines: Boolean(rawCut.speedLines),
+      showBottomLogo: Boolean(rawCut.showBottomLogo),
       captionStyle: rawCut.captionStyle || 'outline',
       captionSize: Number(rawCut.captionSize) || 46,
       headerText: rawCut.headerText || '',
@@ -586,6 +658,8 @@ function applyScriptToState(scriptObj, isInitial = false) {
     };
   });
 
+  // 자동으로 맨 앞에 표지(1컷) 추가 및 마지막 컷 하단 로고 활성화 -> 총 11컷 구성
+  appState.cuts = ensureCoverAndEndLogo(parsedCuts, epTitle);
   appState.currentCutIndex = 0;
   appState.selectedLayerIndex = -1;
   populateSelectMenus();
@@ -651,6 +725,11 @@ function handleBatchSceneUpload(e) {
   let loadedCount = 0;
   const timestamp = Date.now();
 
+  // 표지 컷을 제외한 본문 컷들의 인덱스 목록 추출
+  const bodyCutIndices = appState.cuts
+    .map((c, idx) => (!c.isCover ? idx : -1))
+    .filter(idx => idx !== -1);
+
   files.forEach((file, index) => {
     const reader = new FileReader();
     reader.onload = (ev) => {
@@ -660,9 +739,15 @@ function handleBatchSceneUpload(e) {
         loadedImages[assetKey] = img;
         DEFAULT_ASSETS.backgrounds.push({ id: assetKey, label: `✨ AI장면 #${index + 1} (${file.name})` });
 
-        if (appState.cuts[index]) {
-          appState.cuts[index].background = assetKey;
-          appState.cuts[index].blurBg = false;
+        // 1번 그림을 표지 배경으로도 자동 연결(불투명 흐림 효과 유지)
+        if (index === 0 && appState.cuts[0]?.isCover) {
+          appState.cuts[0].background = assetKey;
+        }
+
+        const targetCutIdx = bodyCutIndices[index];
+        if (typeof targetCutIdx === 'number' && appState.cuts[targetCutIdx]) {
+          appState.cuts[targetCutIdx].background = assetKey;
+          appState.cuts[targetCutIdx].blurBg = false;
         }
 
         loadedCount++;
@@ -671,7 +756,7 @@ function handleBatchSceneUpload(e) {
           appState.currentCutIndex = 0;
           appState.selectedLayerIndex = -1;
           renderAll();
-          alert(`총 ${files.length}장의 AI 그림이 1~${files.length}컷에 자동 배치되었습니다!`);
+          alert(`총 ${files.length}장의 AI 그림이 표지 배경과 본문 1~${files.length}컷에 자동 배치되었습니다!`);
         }
       };
       img.src = ev.target.result;
@@ -695,7 +780,9 @@ function handleLocalAssetUpload(e) {
         DEFAULT_ASSETS.backgrounds.push({ id: key, label: `💻 교체이미지 (${file.name})` });
         if (idx === 0 && appState.cuts[appState.currentCutIndex]) {
           appState.cuts[appState.currentCutIndex].background = key;
-          appState.cuts[appState.currentCutIndex].blurBg = false;
+          if (!appState.cuts[appState.currentCutIndex].isCover) {
+            appState.cuts[appState.currentCutIndex].blurBg = false;
+          }
         }
         populateSelectMenus();
         renderAll();
@@ -707,6 +794,9 @@ function handleLocalAssetUpload(e) {
   e.target.value = '';
 }
 
+// ============================================================================
+// 4. 캔버스 렌더링 (표지 레이아웃 + 하단 로고 워터마크 + 말풍선/자막)
+// ============================================================================
 function drawImageCover(c, img, pad = 0) {
   const targetW = CANVAS_W + pad * 2;
   const targetH = CANVAS_H + pad * 2;
@@ -736,10 +826,31 @@ function drawBackgroundAndMood(c, cut, zoomScale = 1.0) {
     c.scale(zoomScale, zoomScale);
     c.translate(-CANVAS_W / 2, -CANVAS_H / 2);
   }
-  if (cut.blurBg) c.filter = 'blur(12px)';
-  if (loadedImages[bgId]) drawImageCover(c, loadedImages[bgId], cut.blurBg ? 30 : 0);
-  else drawBuiltinBackground(c, bgId);
+  if (cut.blurBg || cut.isCover) c.filter = 'blur(16px)';
+  if (loadedImages[bgId]) {
+    drawImageCover(c, loadedImages[bgId], (cut.blurBg || cut.isCover) ? 36 : 0);
+  } else {
+    drawBuiltinBackground(c, bgId, cut.isCover);
+  }
   c.restore();
+
+  // 표지일 경우 제목과 로고가 선명하게 보이도록 반투명 불투명 막(Translucent Frosted Overlay) 적용
+  if (cut.isCover) {
+    c.save();
+    const coverOverlay = c.createLinearGradient(0, 0, 0, CANVAS_H);
+    coverOverlay.addColorStop(0, 'rgba(15, 23, 42, 0.72)');
+    coverOverlay.addColorStop(0.5, 'rgba(15, 23, 42, 0.64)');
+    coverOverlay.addColorStop(1, 'rgba(15, 23, 42, 0.80)');
+    c.fillStyle = coverOverlay;
+    c.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+    // 세련된 표지 외곽 프레임 라인
+    c.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+    c.lineWidth = 4;
+    c.strokeRect(48, 48, CANVAS_W - 96, CANVAS_H - 96);
+    c.restore();
+    return;
+  }
 
   if (cut.darkMood) {
     c.save();
@@ -754,7 +865,15 @@ function drawBackgroundAndMood(c, cut, zoomScale = 1.0) {
   if (cut.speedLines) drawSpeedLines(c);
 }
 
-function drawBuiltinBackground(c, bgId) {
+function drawBuiltinBackground(c, bgId, isCover = false) {
+  if (isCover) {
+    const grad = c.createLinearGradient(0, 0, CANVAS_W, CANVAS_H);
+    grad.addColorStop(0, '#1e3a8a');
+    grad.addColorStop(1, '#0f172a');
+    c.fillStyle = grad;
+    c.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    return;
+  }
   if (bgId === 'bg_empty.png') {
     c.fillStyle = '#f8fafc';
     c.fillRect(0, 0, CANVAS_W, CANVAS_H);
@@ -772,6 +891,152 @@ function drawBuiltinBackground(c, bgId) {
   }
   c.fillStyle = bgId.includes('dark') ? '#334155' : bgId.includes('forest') ? '#dcfce7' : bgId.includes('office') ? '#eff6ff' : '#fef3c7';
   c.fillRect(0, 0, CANVAS_W, CANVAS_H);
+}
+
+// 표지 전용 렌더링 (지원단 로고 + 중앙 대형 제목 + 부제목)
+function drawCoverLayout(c, cut, alpha = 1.0) {
+  if (alpha <= 0) return;
+  c.save();
+  c.globalAlpha = alpha;
+
+  // 1. 상단 지원단 로고 영역 (Y: 250 부근)
+  const logoCenterY = 290;
+  if (orgLogoImage) {
+    const maxW = 460;
+    const maxH = 140;
+    const ratio = Math.min(maxW / orgLogoImage.width, maxH / orgLogoImage.height);
+    const drawW = orgLogoImage.width * ratio;
+    const drawH = orgLogoImage.height * ratio;
+
+    // 로고가 어두운 배경에서도 선명히 보이도록 은은한 흰색 반투명 캡슐 배경
+    c.fillStyle = 'rgba(255, 255, 255, 0.92)';
+    c.beginPath();
+    c.roundRect(CANVAS_W / 2 - (drawW + 64) / 2, logoCenterY - (drawH + 36) / 2, drawW + 64, drawH + 36, 24);
+    c.fill();
+
+    c.drawImage(orgLogoImage, CANVAS_W / 2 - drawW / 2, logoCenterY - drawH / 2, drawW, drawH);
+  } else {
+    // 로고 미등록 시 기본 기관명 배지
+    c.fillStyle = 'rgba(255, 255, 255, 0.92)';
+    c.beginPath();
+    c.roundRect(CANVAS_W / 2 - 280, logoCenterY - 40, 560, 80, 40);
+    c.fill();
+    c.fillStyle = '#0f172a';
+    c.font = '900 32px "Noto Sans KR", sans-serif';
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.fillText(`🏛️ ${ORG_NAME_DEFAULT}`, CANVAS_W / 2, logoCenterY + 2);
+  }
+
+  // 2. 중앙 메인 제목 (headerText)
+  const mainTitle = (cut.headerText || formatEpisodeDisplayTitle(appState.episodeTitle)).trim();
+  const titleLines = mainTitle.split('\n');
+  const titleFontSize = Math.max(54, Number(cut.captionSize) || 68);
+  const lineHeight = titleFontSize * 1.32;
+  const totalTitleH = titleLines.length * lineHeight;
+  let titleStartY = 630 - totalTitleH / 2 + lineHeight / 2;
+
+  c.font = `900 ${titleFontSize}px "Noto Sans KR", sans-serif`;
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.lineJoin = 'round';
+  c.lineWidth = 14;
+  c.strokeStyle = '#0f172a';
+
+  titleLines.forEach((line, idx) => {
+    const y = titleStartY + idx * lineHeight;
+    c.strokeText(line, CANVAS_W / 2, y);
+    c.fillStyle = idx === 0 ? '#fde047' : '#ffffff';
+    c.fillText(line, CANVAS_W / 2, y);
+  });
+
+  // 3. 장식 구분선
+  const dividerY = titleStartY + totalTitleH + 30;
+  c.strokeStyle = '#38bdf8';
+  c.lineWidth = 6;
+  c.beginPath();
+  c.moveTo(CANVAS_W / 2 - 120, dividerY);
+  c.lineTo(CANVAS_W / 2 + 120, dividerY);
+  c.stroke();
+
+  // 4. 하단 부제목 / 안내 문구 (footerText)
+  const subTitle = (cut.footerText || '').trim();
+  if (subTitle) {
+    c.font = '700 36px "Noto Sans KR", sans-serif';
+    c.fillStyle = '#e2e8f0';
+    c.textAlign = 'center';
+    c.textBaseline = 'top';
+    const subLines = subTitle.split('\n');
+    subLines.forEach((line, idx) => {
+      c.fillText(line, CANVAS_W / 2, dividerY + 45 + idx * 48);
+    });
+  }
+
+  // 5. 하단 슬라이드/시청 유도 안내
+  c.fillStyle = 'rgba(255, 255, 255, 0.16)';
+  c.beginPath();
+  c.roundRect(CANVAS_W / 2 - 190, CANVAS_H - 165, 380, 56, 28);
+  c.fill();
+  c.fillStyle = '#ffffff';
+  c.font = '700 24px "Noto Sans KR", sans-serif';
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.fillText('▶ 옆으로 넘겨서 확인하기', CANVAS_W / 2, CANVAS_H - 137);
+
+  c.restore();
+}
+
+// 마지막 컷 하단 지원단 로고 배치 (하단 자막이 있으면 그 바로 위에 깔끔하게 배치)
+function drawBottomOrgLogo(c, cut, alpha = 1.0) {
+  if (!cut.showBottomLogo || alpha <= 0) return;
+  const hasFooter = Boolean((cut.footerText || '').trim());
+  const footerLines = hasFooter ? cut.footerText.trim().split('\n').length : 0;
+  const footerOffset = hasFooter ? footerLines * ((cut.captionSize || 46) * 1.28) + 28 : 0;
+  const bottomY = CANVAS_H - 42 - footerOffset;
+
+  c.save();
+  c.globalAlpha = alpha;
+
+  if (orgLogoImage) {
+    const maxW = 340;
+    const maxH = 84;
+    const ratio = Math.min(maxW / orgLogoImage.width, maxH / orgLogoImage.height);
+    const drawW = orgLogoImage.width * ratio;
+    const drawH = orgLogoImage.height * ratio;
+
+    const boxW = drawW + 44;
+    const boxH = drawH + 22;
+    const boxX = CANVAS_W / 2 - boxW / 2;
+    const boxY = bottomY - boxH;
+
+    c.fillStyle = 'rgba(255, 255, 255, 0.90)';
+    c.beginPath();
+    c.roundRect(boxX, boxY, boxW, boxH, 18);
+    c.fill();
+
+    c.drawImage(orgLogoImage, CANVAS_W / 2 - drawW / 2, boxY + 11, drawW, drawH);
+  } else {
+    const boxW = 460;
+    const boxH = 56;
+    const boxX = CANVAS_W / 2 - boxW / 2;
+    const boxY = bottomY - boxH;
+
+    c.fillStyle = 'rgba(15, 23, 42, 0.78)';
+    c.beginPath();
+    c.roundRect(boxX, boxY, boxW, boxH, 28);
+    c.fill();
+    c.strokeStyle = 'rgba(255, 255, 255, 0.35)';
+    c.lineWidth = 2;
+    c.stroke();
+
+    c.fillStyle = '#ffffff';
+    c.font = '700 25px "Noto Sans KR", sans-serif';
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.fillText(`🏛️ ${ORG_NAME_DEFAULT}`, CANVAS_W / 2, boxY + boxH / 2 + 1);
+  }
+
+  c.restore();
 }
 
 function drawSpeedLines(c) {
@@ -796,7 +1061,7 @@ function drawSpeedLines(c) {
 }
 
 function drawStoryCaptions(c, cut, cutNumber, totalCuts, alpha = 1.0) {
-  if (alpha <= 0) return;
+  if (alpha <= 0 || cut.isCover) return;
   const style = cut.captionStyle || 'outline';
   const fontSize = cut.captionSize || 46;
   const headerText = (cut.headerText || '').trim();
@@ -817,8 +1082,10 @@ function drawStoryCaptions(c, cut, cutNumber, totalCuts, alpha = 1.0) {
     if (footerText) drawCaptionBlock(c, footerText, CANVAS_H - 40, 'bottom', style, fontSize);
   }
 
+  // 본문 페이지 번호 표시 (표지 제외 기준 또는 전체 기준)
+  const hasCover = appState.cuts[0]?.isCover;
+  const badgeText = hasCover ? `${cutNumber - 1}/${totalCuts - 1}` : `${cutNumber}/${totalCuts}`;
   c.font = '700 22px "Noto Sans KR", sans-serif';
-  const badgeText = `${cutNumber}/${totalCuts}`;
   c.fillStyle = 'rgba(15, 23, 42, 0.55)';
   c.beginPath();
   c.roundRect(CANVAS_W - 110, 24, 84, 38, 19);
@@ -1071,20 +1338,29 @@ function renderCutToContext(targetCtx, cutIndex, showSelection = false) {
 
   drawBackgroundAndMood(targetCtx, cut, 1.0);
 
-  (cut.items || []).forEach((item, idx) => {
-    const t = (item.type || '').toLowerCase();
-    if (t === 'bubble') drawBubbleLayer(targetCtx, item, null);
-    else if (t === 'sticker') drawStickerLayer(targetCtx, item, null);
+  if (cut.isCover) {
+    drawCoverLayout(targetCtx, cut, 1.0);
+  } else {
+    (cut.items || []).forEach((item, idx) => {
+      const t = (item.type || '').toLowerCase();
+      if (t === 'bubble') drawBubbleLayer(targetCtx, item, null);
+      else if (t === 'sticker') drawStickerLayer(targetCtx, item, null);
 
-    if (showSelection && idx === appState.selectedLayerIndex) {
-      drawSelectionBox(targetCtx, item);
-    }
-  });
+      if (showSelection && idx === appState.selectedLayerIndex) {
+        drawSelectionBox(targetCtx, item);
+      }
+    });
 
-  drawStoryCaptions(targetCtx, cut, cutIndex + 1, appState.cuts.length, 1.0);
+    drawStoryCaptions(targetCtx, cut, cutIndex + 1, appState.cuts.length, 1.0);
+    drawBottomOrgLogo(targetCtx, cut, 1.0);
+  }
 }
 
 function getCutAnimationSpec(cut) {
+  if (cut.isCover) {
+    return { orderMap: {}, introDelay: 0.2, stepInterval: 0.5, popDuration: 0.3, totalDuration: 2.3 };
+  }
+
   const items = cut.items || [];
   const sortedIndices = items
     .map((item, idx) => ({ idx, x: item.x || 0, y: item.y || 0 }))
@@ -1102,7 +1378,6 @@ function getCutAnimationSpec(cut) {
   const introDelay = 0.35;
   const stepInterval = 0.65;
   const popDuration = 0.28;
-  // 말풍선 대사 위주 호흡 시간 산정
   const bubbleChars = items.reduce((acc, it) => acc + String(it.text || '').length, 0);
   const readingHold = Math.min(3.2, Math.max(2.0, 1.4 + bubbleChars * 0.055));
   const lastBubbleTime = items.length > 0 ? introDelay + (items.length - 1) * stepInterval + popDuration : introDelay;
@@ -1126,6 +1401,12 @@ function renderAnimatedCutFrame(targetCtx, cutIndex, elapsedSec, spec, onItemApp
   const zoomScale = 1.0 + progress * 0.035;
   drawBackgroundAndMood(targetCtx, cut, zoomScale);
 
+  if (cut.isCover) {
+    const coverAlpha = Math.min(1, elapsedSec / 0.35);
+    drawCoverLayout(targetCtx, cut, coverAlpha);
+    return;
+  }
+
   (cut.items || []).forEach((item, idx) => {
     const seqOrder = spec.orderMap[idx] ?? idx;
     const appearTime = spec.introDelay + seqOrder * spec.stepInterval;
@@ -1133,7 +1414,6 @@ function renderAnimatedCutFrame(targetCtx, cutIndex, elapsedSec, spec, onItemApp
 
     if (localT <= 0) return;
 
-    // 말풍선이 화면에 처음 등장하는 순간 오디오/목소리 트리거
     if (onItemAppearCallback && triggeredSet && !triggeredSet.has(idx)) {
       triggeredSet.add(idx);
       onItemAppearCallback(item, cut);
@@ -1153,6 +1433,7 @@ function renderAnimatedCutFrame(targetCtx, cutIndex, elapsedSec, spec, onItemApp
 
   const captionAlpha = Math.min(1, elapsedSec / 0.25);
   drawStoryCaptions(targetCtx, cut, cutIndex + 1, appState.cuts.length, captionAlpha);
+  drawBottomOrgLogo(targetCtx, cut, captionAlpha);
 }
 
 function stopAllPreviewMedia() {
@@ -1248,7 +1529,11 @@ function renderAll() {
   stopAllPreviewMedia();
   renderCutToContext(ctx, appState.currentCutIndex, true);
   document.getElementById('cutCountLabel').textContent = appState.cuts.length;
-  document.getElementById('currentCutIndicator').textContent = `${appState.currentCutIndex + 1} / ${appState.cuts.length} 컷`;
+
+  const curCut = appState.cuts[appState.currentCutIndex];
+  const labelPrefix = curCut?.isCover ? '📕 표지 ' : '';
+  document.getElementById('currentCutIndicator').textContent = `${labelPrefix}(${appState.currentCutIndex + 1} / ${appState.cuts.length})`;
+
   syncInspectorWithSelection();
   renderThumbnailsAndGrid();
 }
@@ -1264,17 +1549,24 @@ function renderThumbnailsAndGrid() {
   offCanvas.height = CANVAS_H;
   const offCtx = offCanvas.getContext('2d');
 
+  const hasCover = appState.cuts[0]?.isCover;
+
   appState.cuts.forEach((cut, idx) => {
     renderCutToContext(offCtx, idx, false);
     const dataUrl = offCanvas.toDataURL('image/png');
 
+    const titleLabel = cut.isCover
+      ? '📕 표지'
+      : (hasCover ? `#${String(idx).padStart(2, '0')}컷` : `#${String(idx + 1).padStart(2, '0')}컷`);
+
     const card = document.createElement('div');
-    card.className = `cut-thumb-card ${idx === appState.currentCutIndex ? 'active' : ''}`;
+    card.className = `cut-thumb-card ${idx === appState.currentCutIndex ? 'active' : ''} ${cut.isCover ? 'is-cover' : ''}`;
     card.innerHTML = `
       <div class="cut-thumb-header">
-        <span>#${String(idx + 1).padStart(2, '0')}컷</span>
+        <span>${titleLabel}</span>
+        ${cut.showBottomLogo ? '<span title="하단 지원단 로고 표시됨">🏛️</span>' : ''}
       </div>
-      <img src="${dataUrl}" class="cut-thumb-preview" alt="${idx + 1}컷">
+      <img src="${dataUrl}" class="cut-thumb-preview" alt="${titleLabel}">
     `;
     card.addEventListener('click', () => { appState.currentCutIndex = idx; appState.selectedLayerIndex = -1; renderAll(); });
     thumbList.appendChild(card);
@@ -1284,10 +1576,10 @@ function renderThumbnailsAndGrid() {
       gridItem.className = 'grid-cut-item';
       gridItem.innerHTML = `
         <div class="grid-cut-top">
-          <span>${idx + 1}번째 컷</span>
+          <span>${cut.isCover ? '📕 표지 페이지' : `${hasCover ? idx : idx + 1}번째 컷`}</span>
           <button class="btn btn-outline-sm btn-edit-this">편집하기</button>
         </div>
-        <img src="${dataUrl}" class="grid-cut-img" alt="${idx + 1}컷">
+        <img src="${dataUrl}" class="grid-cut-img" alt="${titleLabel}">
       `;
       gridItem.querySelector('.grid-cut-img').addEventListener('click', () => switchToCutEdit(idx));
       gridItem.querySelector('.btn-edit-this').addEventListener('click', () => switchToCutEdit(idx));
@@ -1343,7 +1635,7 @@ function bindCanvasMouseEvents() {
     stopAllPreviewMedia();
     const pos = getCanvasMousePos(e);
     const cut = appState.cuts[appState.currentCutIndex];
-    if (!cut) return;
+    if (!cut || cut.isCover) return;
 
     if (appState.selectedLayerIndex >= 0 && cut.items[appState.selectedLayerIndex]) {
       const selItem = cut.items[appState.selectedLayerIndex];
@@ -1461,11 +1753,21 @@ function syncInspectorWithSelection() {
   document.getElementById('cutHeaderInput').value = cut.headerText || '';
   document.getElementById('cutFooterInput').value = cut.footerText || '';
   document.getElementById('captionStyleSelect').value = cut.captionStyle || 'outline';
-  document.getElementById('captionSizeInput').value = cut.captionSize || 46;
+  document.getElementById('captionSizeInput').value = cut.captionSize || (cut.isCover ? 68 : 46);
+
+  // 표지일 때 안내 라벨 변경
+  const headerLabel = document.getElementById('headerLabelText');
+  const footerLabel = document.getElementById('footerLabelText');
+  if (headerLabel) headerLabel.textContent = cut.isCover ? '📕 표지 대제목 (중앙 배치)' : '상단 사연 자막 (흰 글씨 + 검은 외곽선)';
+  if (footerLabel) footerLabel.textContent = cut.isCover ? '📕 표지 부제목 (중앙 하단 배치)' : '하단 사연 자막 (흰 글씨 + 검은 외곽선)';
 
   document.getElementById('btnToggleBlur').style.borderColor = cut.blurBg ? '#3b82f6' : '';
   document.getElementById('btnToggleDark').style.borderColor = cut.darkMood ? '#3b82f6' : '';
   document.getElementById('btnToggleSpeed').style.borderColor = cut.speedLines ? '#3b82f6' : '';
+  const bottomLogoBtn = document.getElementById('btnToggleBottomLogo');
+  if (bottomLogoBtn) {
+    bottomLogoBtn.style.backgroundColor = cut.showBottomLogo ? 'rgba(56, 189, 248, 0.25)' : '';
+  }
 
   const item = cut.items[appState.selectedLayerIndex];
   const noSelMsg = document.getElementById('noSelectionMsg');
@@ -1480,7 +1782,7 @@ function syncInspectorWithSelection() {
   if (!item) {
     noSelMsg.classList.remove('hidden');
     commonCtrl.classList.add('hidden');
-    badge.textContent = '선택 없음';
+    badge.textContent = cut.isCover ? '📕 표지 페이지' : '선택 없음';
     return;
   }
   noSelMsg.classList.add('hidden');
@@ -1510,11 +1812,45 @@ function bindUIEvents() {
     syncGithubAssets(document.getElementById('ghOwner').value.trim(), document.getElementById('ghRepo').value.trim(), document.getElementById('ghBranch').value.trim() || 'main', false);
   });
 
+  document.getElementById('orgLogoInput').addEventListener('change', handleOrgLogoUpload);
   document.getElementById('batchSceneInput').addEventListener('change', handleBatchSceneUpload);
   document.getElementById('localAssetInput').addEventListener('change', handleLocalAssetUpload);
 
+  // 상단 제목/파일명 입력 시 표지 제목도 실시간 동기화
+  document.getElementById('episodeTitleInput').addEventListener('input', (e) => {
+    appState.episodeTitle = e.target.value;
+    if (appState.cuts[0]?.isCover) {
+      appState.cuts[0].headerText = formatEpisodeDisplayTitle(e.target.value);
+      renderAll();
+    }
+  });
+
+  document.getElementById('btnAddCoverCut').addEventListener('click', () => {
+    if (appState.cuts[0]?.isCover) {
+      appState.currentCutIndex = 0;
+      renderAll();
+      return alert('이미 맨 앞에 표지 페이지가 있습니다!');
+    }
+    saveHistorySnapshot();
+    const firstBg = appState.cuts[0]?.background || 'bg_empty.png';
+    const firstHeader = appState.cuts[0]?.headerText || '';
+    appState.cuts.unshift(createCoverCutObject(appState.episodeTitle, firstBg, firstHeader));
+    appState.currentCutIndex = 0;
+    appState.selectedLayerIndex = -1;
+    renderAll();
+  });
+
+  document.getElementById('btnToggleBottomLogo').addEventListener('click', () => {
+    const cut = appState.cuts[appState.currentCutIndex];
+    if (cut && !cut.isCover) {
+      saveHistorySnapshot();
+      cut.showBottomLogo = !cut.showBottomLogo;
+      renderAll();
+    }
+  });
+
   document.getElementById('btnClearWorkspace').addEventListener('click', () => {
-    if (!confirm('현재 작업 중인 자막, 말풍선, 이미지를 모두 비우고 초기 상태로 되돌릴까요?')) return;
+    if (!confirm('현재 작업 중인 자막, 말풍선, 이미지를 모두 비우고 초기 상태로 되돌릴까요? (등록한 지원단 로고는 유지됩니다)')) return;
     saveHistorySnapshot();
     loadedImages = {};
     DEFAULT_ASSETS.backgrounds = DEFAULT_ASSETS.backgrounds.filter(b => !b.id.startsWith('ai_scene_') && !b.id.startsWith('custom_'));
@@ -1560,11 +1896,13 @@ function bindUIEvents() {
   document.getElementById('btnAddCut').addEventListener('click', () => {
     saveHistorySnapshot();
     appState.cuts.push({
+      isCover: false,
       background: 'bg_empty.png',
       scenePrompt: '',
       blurBg: false,
       darkMood: false,
       speedLines: false,
+      showBottomLogo: true,
       captionStyle: 'outline',
       captionSize: 46,
       headerText: '새 자막을 입력하세요',
@@ -1581,6 +1919,7 @@ function bindUIEvents() {
     if (!cur) return;
     saveHistorySnapshot();
     const clone = JSON.parse(JSON.stringify(cur));
+    clone.isCover = false;
     appState.cuts.splice(appState.currentCutIndex + 1, 0, clone);
     appState.currentCutIndex++;
     renderAll();
@@ -1620,13 +1959,15 @@ function bindUIEvents() {
     const cut = appState.cuts[appState.currentCutIndex];
     if (cut) {
       cut.headerText = e.target.value;
-      const headerLines = cut.headerText ? cut.headerText.split('\n').length : 1;
-      const safeY = headerLines >= 2 ? 280 : 220;
-      (cut.items || []).forEach(item => {
-        if ((item.type || '').toLowerCase() === 'bubble') {
-          item.y = safeY;
-        }
-      });
+      if (!cut.isCover) {
+        const headerLines = cut.headerText ? cut.headerText.split('\n').length : 1;
+        const safeY = headerLines >= 2 ? 280 : 220;
+        (cut.items || []).forEach(item => {
+          if ((item.type || '').toLowerCase() === 'bubble') {
+            item.y = safeY;
+          }
+        });
+      }
       renderAll();
     }
   });
@@ -1650,6 +1991,7 @@ function bindUIEvents() {
 
   document.getElementById('btnAddBubble').addEventListener('click', () => {
     const cut = appState.cuts[appState.currentCutIndex];
+    if (cut.isCover) return alert('표지 페이지에는 말풍선을 추가할 수 없습니다. 다음 컷으로 이동해 주세요.');
     saveHistorySnapshot();
     const headerLines = cut.headerText ? cut.headerText.split('\n').length : 1;
     const safeY = headerLines >= 2 ? 280 : 220;
@@ -1673,6 +2015,7 @@ function bindUIEvents() {
 
   document.getElementById('btnAddSticker').addEventListener('click', () => {
     const cut = appState.cuts[appState.currentCutIndex];
+    if (cut.isCover) return alert('표지 페이지에는 스티커를 추가할 수 없습니다.');
     saveHistorySnapshot();
     cut.items.push({
       type: 'sticker',
@@ -1866,7 +2209,8 @@ function getSanitizedEpisodeName() {
 
 function downloadCurrentCutPng() {
   const epName = getSanitizedEpisodeName();
-  const numStr = String(appState.currentCutIndex + 1).padStart(2, '0');
+  const isCover = appState.cuts[appState.currentCutIndex]?.isCover;
+  const numStr = isCover ? '00_표지' : String(appState.currentCutIndex).padStart(2, '0');
   const fileName = `${epName}_${numStr}.png`;
 
   const exportCanvas = document.createElement('canvas');
@@ -1901,7 +2245,8 @@ async function downloadAllCutsZip() {
 
     for (let i = 0; i < appState.cuts.length; i++) {
       const numStr = String(i + 1).padStart(2, '0');
-      const imgFileName = `${epName}_${numStr}.png`;
+      const suffix = appState.cuts[i].isCover ? '_표지' : '';
+      const imgFileName = `${epName}_${numStr}${suffix}.png`;
       loadingText.textContent = `${imgFileName} 렌더링 중... (${i + 1} / ${appState.cuts.length})`;
 
       renderCutToContext(exportCtx, i, false);
@@ -1924,9 +2269,6 @@ async function downloadAllCutsZip() {
   }
 }
 
-// ============================================================================
-// 7. 원클릭 MP4 동영상 저장 (BGM + 토끼/호랑이 대화 보이스 오디오 트랙 결합)
-// ============================================================================
 async function downloadReelsMp4() {
   stopAllPreviewMedia();
   const epName = getSanitizedEpisodeName();
@@ -1943,13 +2285,11 @@ async function downloadReelsMp4() {
   const hasAudio = appState.audioOptions.enableBgm || appState.audioOptions.enableVoice;
 
   try {
-    // 오디오가 켜져 있으면 실시간 캔버스+WebAudio 결합 스트림으로 MP4/WebM 녹화
     if (hasAudio) {
       await recordVideoWithAudio(exportCanvas, exportCtx, fps, epName, loadingText);
       return;
     }
 
-    // 오디오가 모두 꺼져 있을 때는 초고속 무음 WebCodecs 인코딩
     if (typeof VideoEncoder !== 'undefined' && typeof Mp4Muxer !== 'undefined') {
       const codecCandidates = ['avc1.64002a', 'avc1.4d002a', 'avc1.42002a', 'avc1.42E01E'];
       let chosenCodec = null;
@@ -2061,7 +2401,7 @@ async function recordVideoWithAudio(exportCanvas, exportCtx, fps, epName, loadin
         const elapsedSec = (performance.now() - startMs) / 1000;
         if (elapsedSec > spec.totalDuration) break;
 
-        loadingText.textContent = `🎬 BGM·대화 목소리 합성 녹화 중... (${i + 1} / ${appState.cuts.length}컷)`;
+        loadingText.textContent = `🎬 표지·BGM·목소리 합성 녹화 중... (${i + 1} / ${appState.cuts.length}장)`;
         renderAnimatedCutFrame(exportCtx, i, elapsedSec, spec, (item, curCut) => {
           if (audioEngine && appState.audioOptions.enableVoice && (item.type || '').toLowerCase() === 'bubble') {
             const role = detectBubbleSpeakerRole(item, curCut);
@@ -2092,7 +2432,7 @@ async function recordVideoWithAudio(exportCanvas, exportCtx, fps, epName, loadin
 function updateMasterPromptText() {
   const preset = WORLD_PRESETS[appState.worldPreset] || WORLD_PRESETS.mammal;
   const prompt = `너는 공공기관 인스타그램의 '감염병 예방 10컷 스토리툰' 전담 작가야.
-아래 지침 중 **단 1가지 핵심 주제**만 집중적으로 다루는 10컷 스토리툰 시나리오를 순수 JSON 형식으로 작성해 줘.
+아래 지침 중 **단 1가지 핵심 주제**만 집중적으로 다루는 10컷 스토리툰 시나리오를 순수 JSON 형식으로 작성해 줘. (표지는 프로그램이 자동 생성하므로 본문 10컷만 작성하면 돼!)
 
 [스토리 전개 원칙]
 - 1~2컷: 일상 도입 / 3~4컷: 실수·위기 / 5~6컷: 연구원 박사 등장 및 원리 설명 / 7~9컷: 올바른 실천 / 10컷: 여운 및 다음 편 예고.
@@ -2100,7 +2440,7 @@ function updateMasterPromptText() {
 
 [JSON 작성 규칙]
 1. 반드시 순수 JSON 코드만 출력해.
-2. "episodeTitle"에는 파일 저장용 이름(예: "진드기_1탄_옷차림편")을 넣어 줘.
+2. "episodeTitle"에는 표지 제목 겸 파일 저장용 이름(예: "진드기_1탄_옷차림편")을 넣어 줘.
 3. "scenePrompt" 작성 시, 각 컷의 대화 성격에 맞춰 캐릭터가 **화면 왼쪽**에 위치하는지 혹은 **화면 오른쪽**에 위치하는지를 명시해 줘.
 
 [JSON 출력 양식]
@@ -2140,10 +2480,11 @@ function openArtPromptModal() {
 - 세로형 4:5 비율 (1080x1350).
 
 =========================================
-아래 1번부터 10번까지 한 컷씩 그려줘:
+아래 본문 1번부터 10번까지 한 컷씩 그려줘:
 =========================================\n\n`;
 
-  const scenes = appState.cuts.map((cut, idx) => {
+  const bodyCuts = appState.cuts.filter(c => !c.isCover);
+  const scenes = bodyCuts.map((cut, idx) => {
     const desc = cut.scenePrompt || cut.headerText || '장면 설명';
     const firstBubble = (cut.items || []).find(it => (it.type || '').toLowerCase() === 'bubble');
     let positionHint = '화면 중앙에 배치';
