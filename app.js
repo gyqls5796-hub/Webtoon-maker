@@ -1,6 +1,6 @@
 /**
- * 인스타그램 10컷 웹툰 자동 제작기 (원포인트 스토리툰 + 자유 꼬리 + 멀티 세계관 + 자동 시퀀스 MP4 에디션)
- * - 상단 자막 겹침 방지 및 말풍선 자동 높이 확장(글자 밖 탈출 방지) 완벽 반영 버전
+ * 인스타그램 10컷 웹툰 자동 제작기
+ * (원포인트 스토리툰 + 자유 꼬리 + 멀티 세계관 + 실행취소(Undo) + 저작권 프리 BGM & 토끼/호랑이 대화 보이스 MP4 에디션)
  */
 
 const CANVAS_W = 1080;
@@ -57,8 +57,19 @@ let appState = {
   currentCutIndex: 0,
   selectedLayerIndex: -1,
   viewMode: 'single',
-  cuts: []
+  cuts: [],
+  audioOptions: {
+    enableBgm: true,
+    enableVoice: true,
+    voiceStyle: 'tts_with_animal' // 'tts_with_animal' | 'animal_only'
+  }
 };
+
+// 실행 취소(Undo) / 다시 실행(Redo) 히스토리 스택
+const MAX_HISTORY = 30;
+let undoStack = [];
+let redoStack = [];
+let isRestoringHistory = false;
 
 let dragState = {
   isDragging: false,
@@ -69,10 +80,352 @@ let dragState = {
 };
 
 let previewAnimId = null;
+let activeAudioCtx = null;
 
 const mainCanvas = document.getElementById('mainCanvas');
 const ctx = mainCanvas.getContext('2d');
 
+// ============================================================================
+// 0. 실행 취소(Undo) / 다시 실행(Redo) & 오디오 설정 툴바 주입
+// ============================================================================
+function saveHistorySnapshot() {
+  if (isRestoringHistory) return;
+  const snapshot = JSON.stringify({
+    cuts: appState.cuts,
+    currentCutIndex: appState.currentCutIndex,
+    selectedLayerIndex: appState.selectedLayerIndex
+  });
+  if (undoStack.length > 0 && undoStack[undoStack.length - 1] === snapshot) return;
+  undoStack.push(snapshot);
+  if (undoStack.length > MAX_HISTORY) undoStack.shift();
+  redoStack = [];
+  updateUndoRedoButtons();
+}
+
+function undoAction() {
+  if (undoStack.length === 0) return;
+  const currentSnapshot = JSON.stringify({
+    cuts: appState.cuts,
+    currentCutIndex: appState.currentCutIndex,
+    selectedLayerIndex: appState.selectedLayerIndex
+  });
+  redoStack.push(currentSnapshot);
+
+  const prevSnapshot = undoStack.pop();
+  isRestoringHistory = true;
+  try {
+    const parsed = JSON.parse(prevSnapshot);
+    appState.cuts = parsed.cuts;
+    appState.currentCutIndex = Math.min(parsed.currentCutIndex, appState.cuts.length - 1);
+    appState.selectedLayerIndex = parsed.selectedLayerIndex;
+    renderAll();
+  } finally {
+    isRestoringHistory = false;
+    updateUndoRedoButtons();
+  }
+}
+
+function redoAction() {
+  if (redoStack.length === 0) return;
+  const currentSnapshot = JSON.stringify({
+    cuts: appState.cuts,
+    currentCutIndex: appState.currentCutIndex,
+    selectedLayerIndex: appState.selectedLayerIndex
+  });
+  undoStack.push(currentSnapshot);
+
+  const nextSnapshot = redoStack.pop();
+  isRestoringHistory = true;
+  try {
+    const parsed = JSON.parse(nextSnapshot);
+    appState.cuts = parsed.cuts;
+    appState.currentCutIndex = Math.min(parsed.currentCutIndex, appState.cuts.length - 1);
+    appState.selectedLayerIndex = parsed.selectedLayerIndex;
+    renderAll();
+  } finally {
+    isRestoringHistory = false;
+    updateUndoRedoButtons();
+  }
+}
+
+function updateUndoRedoButtons() {
+  const undoBtn = document.getElementById('btnUndoAction');
+  const redoBtn = document.getElementById('btnRedoAction');
+  if (undoBtn) {
+    undoBtn.disabled = undoStack.length === 0;
+    undoBtn.style.opacity = undoStack.length === 0 ? '0.45' : '1';
+    undoBtn.textContent = `↩️ 되돌리기 (${undoStack.length})`;
+  }
+  if (redoBtn) {
+    redoBtn.disabled = redoStack.length === 0;
+    redoBtn.style.opacity = redoStack.length === 0 ? '0.45' : '1';
+  }
+}
+
+function injectToolbarEnhancements() {
+  const navControls = document.querySelector('.cut-nav-controls');
+  if (navControls && !document.getElementById('btnUndoAction')) {
+    const undoBtn = document.createElement('button');
+    undoBtn.id = 'btnUndoAction';
+    undoBtn.className = 'btn btn-outline-sm';
+    undoBtn.textContent = '↩️ 되돌리기 (0)';
+    undoBtn.title = '방금 한 작업 취소 (단축키: Ctrl+Z)';
+    undoBtn.style.borderColor = '#f59e0b';
+    undoBtn.style.color = '#fbbf24';
+    undoBtn.addEventListener('click', undoAction);
+
+    const redoBtn = document.createElement('button');
+    redoBtn.id = 'btnRedoAction';
+    redoBtn.className = 'btn btn-outline-sm';
+    redoBtn.textContent = '↪️';
+    redoBtn.title = '되돌리기 취소 (단축키: Ctrl+Y)';
+    redoBtn.addEventListener('click', redoAction);
+
+    const divider = document.createElement('span');
+    divider.className = 'divider';
+    divider.textContent = '|';
+
+    navControls.insertBefore(divider, navControls.firstChild);
+    navControls.insertBefore(redoBtn, navControls.firstChild);
+    navControls.insertBefore(undoBtn, navControls.firstChild);
+
+    window.addEventListener('keydown', (e) => {
+      const tag = (e.target.tagName || '').toUpperCase();
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) redoAction();
+        else undoAction();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        redoAction();
+      }
+    });
+    updateUndoRedoButtons();
+  }
+
+  // 상단 내보내기 바에 오디오 옵션 토글 주입
+  const exportBar = document.querySelector('.export-bar');
+  if (exportBar && !document.getElementById('audioOptionBox')) {
+    const box = document.createElement('div');
+    box.id = 'audioOptionBox';
+    box.style.cssText = 'display:flex; align-items:center; gap:8px; background:rgba(15,23,42,0.7); border:1px solid #334155; padding:4px 10px; border-radius:6px; font-size:12px; color:#e2e8f0;';
+    box.innerHTML = `
+      <label style="display:flex; align-items:center; gap:4px; cursor:pointer;" title="저작권 걱정 없는 잔잔한 자체 작곡 BGM 포함">
+        <input type="checkbox" id="chkEnableBgm" checked> 🎵 잔잔한BGM
+      </label>
+      <label style="display:flex; align-items:center; gap:4px; cursor:pointer;" title="토끼(높은 톤)·호랑이(낮은 톤) 말풍선 대화 보이스 포함">
+        <input type="checkbox" id="chkEnableVoice" checked> 🗣️ 대화목소리
+      </label>
+    `;
+    const mp4Btn = document.getElementById('btnDownloadMp4');
+    if (mp4Btn) exportBar.insertBefore(box, mp4Btn);
+    else exportBar.appendChild(box);
+
+    document.getElementById('chkEnableBgm').addEventListener('change', (e) => {
+      appState.audioOptions.enableBgm = e.target.checked;
+    });
+    document.getElementById('chkEnableVoice').addEventListener('change', (e) => {
+      appState.audioOptions.enableVoice = e.target.checked;
+    });
+  }
+}
+
+// ============================================================================
+// 0-2. 화자 자동 판별 (토끼 시민 vs 호랑이 박사) 및 Web Audio BGM·보이스 엔진
+// ============================================================================
+function detectBubbleSpeakerRole(bubble, cut) {
+  const speaker = (bubble.speaker || '').trim();
+  const text = (bubble.text || '').trim();
+  const scene = (cut?.scenePrompt || '') + ' ' + (cut?.headerText || '');
+
+  // 1. 화자 이름표 명시 시 우선 판별
+  if (speaker.includes('호랑이') || speaker.includes('박사') || speaker.includes('연구원') || speaker.includes('부엉이') || speaker.includes('티라노') || speaker.includes('수달') || speaker.includes('사마귀')) {
+    return 'doctor'; // 낮고 듬직한 연구원 톤
+  }
+  if (speaker.includes('토끼') || speaker.includes('시민') || speaker.includes('나비') || speaker.includes('아기')) {
+    return 'citizen'; // 높고 발랄한 시민 톤
+  }
+
+  // 2. 대사 어투 및 설명형 전문 용어 기반 판별
+  const doctorKeywords = ['위험해요', '막아야', '보이죠', '줄일 수 있답니다', '알려드릴게요', '예방', '비말', '침투', '식별', '수칙', '잠깐!'];
+  if (doctorKeywords.some(kw => text.includes(kw))) {
+    return 'doctor';
+  }
+
+  const citizenKeywords = ['다녀와야지', '최고야', '풀잎인가', '안 보여', '정답이었네요', '보이네', '으악', '우와', '아하', '앗,'];
+  if (citizenKeywords.some(kw => text.includes(kw))) {
+    return 'citizen';
+  }
+
+  // 3. 꼬리 위치 기반 (보통 오른쪽에 박사, 왼쪽에 시민이 서는 구도 반영)
+  if (typeof bubble.tailX === 'number' && bubble.tailX > CANVAS_W * 0.58) {
+    return 'doctor';
+  }
+  if (scene.includes('박사') && !scene.includes('토끼') && !scene.includes('시민')) {
+    return 'doctor';
+  }
+  return 'citizen';
+}
+
+// 한국어 TTS 음성 재생 (미리보기 및 시스템 오디오 캡처 지원)
+function speakBubbleTextTTS(text, role) {
+  if (!('speechSynthesis' in window)) return;
+  try {
+    window.speechSynthesis.cancel();
+    const cleanText = String(text).replace(/\n/g, ' ').replace(/[~!]+/g, ' ').trim();
+    if (!cleanText) return;
+
+    const utter = new SpeechSynthesisUtterance(cleanText);
+    utter.lang = 'ko-KR';
+    const voices = window.speechSynthesis.getVoices().filter(v => v.lang.includes('ko'));
+
+    if (role === 'doctor') {
+      // 호랑이 박사: 차분하고 듬직한 중저음 톤
+      utter.pitch = 0.82;
+      utter.rate = 1.05;
+      if (voices.length > 1) utter.voice = voices[voices.length - 1];
+    } else {
+      // 토끼 시민: 밝고 경쾌한 하이톤
+      utter.pitch = 1.32;
+      utter.rate = 1.12;
+      if (voices.length > 0) utter.voice = voices[0];
+    }
+    window.speechSynthesis.speak(utter);
+  } catch (e) {
+    console.warn('TTS 재생 실패:', e);
+  }
+}
+
+// Web Audio API 기반 저작권 프리 잔잔한 BGM + 귀여운 캐릭터 대화 음성 합성기
+class WebtoonAudioEngine {
+  constructor() {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    this.ctx = new AudioContextClass();
+    this.dest = this.ctx.createMediaStreamDestination();
+    this.masterGain = this.ctx.createGain();
+    this.masterGain.gain.value = 0.85;
+    this.masterGain.connect(this.dest);
+    this.masterGain.connect(this.ctx.destination);
+    this.isStopped = false;
+    this.bgmTimer = null;
+  }
+
+  getAudioStream() {
+    return this.dest.stream;
+  }
+
+  // 잔잔하고 따뜻한 로파이/오르골풍 아르페지오 BGM 루프 (완전 자체 합성 - 저작권 0%)
+  startGentleBgm() {
+    if (this.isStopped) return;
+    // Cmaj7 - Am7 - Fmaj7 - G6 따뜻하고 평화로운 코드 진행 (Hz)
+    const chords = [
+      [261.63, 329.63, 392.00, 493.88], // Cmaj7
+      [220.00, 261.63, 329.63, 392.00], // Am7
+      [174.61, 220.00, 261.63, 329.63], // Fmaj7
+      [196.00, 246.94, 293.66, 329.63]  // G6
+    ];
+    let step = 0;
+
+    const playNote = () => {
+      if (this.isStopped) return;
+      const now = this.ctx.currentTime;
+      const chordIdx = Math.floor(step / 4) % chords.length;
+      const noteIdx = step % 4;
+      const freq = chords[chordIdx][noteIdx];
+
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now);
+
+      // 부드러운 오르골 엔벨로프 (작고 잔잔한 볼륨: 0.045)
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.045, now + 0.06);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.1);
+
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      osc.start(now);
+      osc.stop(now + 1.15);
+
+      // 매 마디 첫 박자에 따뜻한 저음 베이스 추가
+      if (noteIdx === 0) {
+        const bassOsc = this.ctx.createOscillator();
+        const bassGain = this.ctx.createGain();
+        bassOsc.type = 'triangle';
+        bassOsc.frequency.setValueAtTime(freq * 0.5, now);
+        bassGain.gain.setValueAtTime(0.0001, now);
+        bassGain.gain.exponentialRampToValueAtTime(0.035, now + 0.1);
+        bassGain.gain.exponentialRampToValueAtTime(0.0001, now + 1.6);
+        bassOsc.connect(bassGain);
+        bassGain.connect(this.masterGain);
+        bassOsc.start(now);
+        bassOsc.stop(now + 1.65);
+      }
+
+      step++;
+      this.bgmTimer = setTimeout(playNote, 450);
+    };
+
+    playNote();
+  }
+
+  // 말풍선 대사 글자 수와 화자(토끼 vs 호랑이)에 맞춰 귀여운 캐릭터 대화음 합성 (MP4 트랙에 직접 녹음됨)
+  playCharacterDialogueVoice(text, role) {
+    if (this.isStopped) return;
+    const cleanText = String(text || '').replace(/\s+/g, '');
+    const syllableCount = Math.min(18, Math.max(4, Math.ceil(cleanText.length * 0.65)));
+    const now = this.ctx.currentTime;
+
+    // 토끼 시민(높고 귀여운 톤: 420~560Hz) vs 호랑이 박사(낮고 듬직한 톤: 175~240Hz)
+    const baseFreq = role === 'doctor' ? 190 : 460;
+    const interval = role === 'doctor' ? 0.095 : 0.078;
+
+    for (let i = 0; i < syllableCount; i++) {
+      const t = now + i * interval;
+      const charCode = cleanText.charCodeAt(i % cleanText.length) || 65;
+      const pitchOffset = ((charCode % 7) - 3) * (role === 'doctor' ? 8 : 18);
+      const freq = Math.max(110, baseFreq + pitchOffset);
+
+      const osc = this.ctx.createOscillator();
+      const filter = this.ctx.createBiquadFilter();
+      const gain = this.ctx.createGain();
+
+      osc.type = role === 'doctor' ? 'sawtooth' : 'triangle';
+      osc.frequency.setValueAtTime(freq, t);
+      osc.frequency.exponentialRampToValueAtTime(freq * (role === 'doctor' ? 0.94 : 1.06), t + interval * 0.8);
+
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(role === 'doctor' ? 680 : 1650, t);
+
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.exponentialRampToValueAtTime(role === 'doctor' ? 0.085 : 0.075, t + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + interval * 0.85);
+
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(this.masterGain);
+
+      osc.start(t);
+      osc.stop(t + interval * 0.9);
+    }
+  }
+
+  stop() {
+    this.isStopped = true;
+    if (this.bgmTimer) clearTimeout(this.bgmTimer);
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    if (this.ctx && this.ctx.state !== 'closed') {
+      this.ctx.close().catch(() => {});
+    }
+  }
+}
+
+// ============================================================================
+// 1. 빈 워크스페이스 & 샘플 대본 데이터
+// ============================================================================
 function createEmpty10Cuts() {
   return Array.from({ length: 10 }, (_, idx) => ({
     background: 'bg_empty.png',
@@ -100,10 +453,10 @@ function getSampleScriptData() {
         speedLines: false,
         captionStyle: "outline",
         captionSize: 46,
-        headerText: "선명한 바람이 부는 주말,\n토끼 시민의 설레는 산책 준비!",
+        headerText: "선선한 바람이 부는 주말,\n토끼 시민의 설레는 산책 준비!",
         footerText: "야외활동 전 필수 수칙 1탄: 밝은색 긴옷 착용",
         items: [
-          { type: "bubble", bubbleStyle: "round", tailDir: "left", speaker: "", text: "날씨도 좋은데 가벼운 차림으로\n뒷산 풀밭 산책 다녀와야지!", fontSize: 36, textColor: "#111827", bgColor: "#ffffff", x: 90, width: 900, tailX: 300, tailY: 480 }
+          { type: "bubble", bubbleStyle: "round", tailDir: "left", speaker: "", text: "날씨도 좋은데 시원하게 입고\n뒷산 풀밭 산책 다녀와야지!", fontSize: 36, textColor: "#111827", bgColor: "#ffffff", x: 90, width: 900, tailX: 300, tailY: 480 }
         ]
       }
     ]
@@ -111,6 +464,10 @@ function getSampleScriptData() {
 }
 
 window.addEventListener('DOMContentLoaded', () => {
+  injectToolbarEnhancements();
+  if ('speechSynthesis' in window) {
+    window.speechSynthesis.getVoices();
+  }
   loadSavedGithubSettings();
   populateSelectMenus();
 
@@ -193,6 +550,7 @@ function applyScriptToState(scriptObj, isInitial = false) {
   }
 
   if (!isInitial) {
+    saveHistorySnapshot();
     Object.keys(loadedImages).forEach(key => {
       if (key.startsWith('ai_scene_')) delete loadedImages[key];
     });
@@ -242,18 +600,14 @@ function getDefaultTailPoint(b) {
 }
 
 function normalizeBubbleLayout(b, headerText = '') {
-  const text = String(b.text || '\n');
+  const text = String(b.text || '');
   const fontSize = Number(b.fontSize) || 36;
-  
-  // 글자 줄 바꿈 수와 글자 길이를 분석해 말풍선 높이(height)와 위치(y)를 완벽하게 자동 계산
   const lines = text.split('\n');
   const lineCount = lines.length;
-  
-  // 폰트 크기와 줄 수에 맞춰 말풍선 박스 크기를 넉넉하게 산정 (글자가 밖으로 튀어나가지 않음)
+
   const autoHeight = Math.max(210, lineCount * (fontSize * 1.5) + 75);
   const autoWidth = 900;
 
-  // 상단 자막 줄 수에 따라 말풍선 시작 위치(y)를 아래로 내려 겹침 원천 방지
   const headerLines = headerText ? headerText.split('\n').length : 1;
   const safeY = headerLines >= 2 ? 280 : 220;
 
@@ -261,7 +615,7 @@ function normalizeBubbleLayout(b, headerText = '') {
     type: 'bubble',
     bubbleStyle: b.bubbleStyle || 'round',
     tailDir: b.tailDir || 'bottom',
-    speaker: '',
+    speaker: b.speaker || '',
     text: text,
     fontSize: fontSize,
     textColor: b.textColor || '#111827',
@@ -286,6 +640,7 @@ function normalizeBubbleLayout(b, headerText = '') {
 function handleBatchSceneUpload(e) {
   const files = Array.from(e.target.files || []);
   if (!files.length) return;
+  saveHistorySnapshot();
   files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
 
   Object.keys(loadedImages).forEach(key => {
@@ -329,6 +684,7 @@ function handleBatchSceneUpload(e) {
 function handleLocalAssetUpload(e) {
   const files = Array.from(e.target.files || []);
   if (!files.length) return;
+  saveHistorySnapshot();
   files.forEach((file, idx) => {
     const reader = new FileReader();
     reader.onload = (ev) => {
@@ -744,11 +1100,11 @@ function getCutAnimationSpec(cut) {
   });
 
   const introDelay = 0.35;
-  const stepInterval = 0.55;
+  const stepInterval = 0.65;
   const popDuration = 0.28;
-  const totalChars = items.reduce((acc, it) => acc + String(it.text || '').length, 0) +
-    String(cut.headerText || '').length + String(cut.footerText || '').length;
-  const readingHold = Math.min(2.8, Math.max(1.6, 1.2 + totalChars * 0.035));
+  // 말풍선 대사 위주 호흡 시간 산정
+  const bubbleChars = items.reduce((acc, it) => acc + String(it.text || '').length, 0);
+  const readingHold = Math.min(3.2, Math.max(2.0, 1.4 + bubbleChars * 0.055));
   const lastBubbleTime = items.length > 0 ? introDelay + (items.length - 1) * stepInterval + popDuration : introDelay;
   const totalDuration = lastBubbleTime + readingHold;
 
@@ -761,7 +1117,7 @@ function easeOutBack(x) {
   return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
 }
 
-function renderAnimatedCutFrame(targetCtx, cutIndex, elapsedSec, spec) {
+function renderAnimatedCutFrame(targetCtx, cutIndex, elapsedSec, spec, onItemAppearCallback = null, triggeredSet = null) {
   const cut = appState.cuts[cutIndex];
   if (!cut) return;
   targetCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
@@ -776,6 +1132,12 @@ function renderAnimatedCutFrame(targetCtx, cutIndex, elapsedSec, spec) {
     const localT = (elapsedSec - appearTime) / spec.popDuration;
 
     if (localT <= 0) return;
+
+    // 말풍선이 화면에 처음 등장하는 순간 오디오/목소리 트리거
+    if (onItemAppearCallback && triggeredSet && !triggeredSet.has(idx)) {
+      triggeredSet.add(idx);
+      onItemAppearCallback(item, cut);
+    }
 
     let alpha = 1.0;
     let scale = 1.0;
@@ -793,11 +1155,22 @@ function renderAnimatedCutFrame(targetCtx, cutIndex, elapsedSec, spec) {
   drawStoryCaptions(targetCtx, cut, cutIndex + 1, appState.cuts.length, captionAlpha);
 }
 
-function previewCurrentCutAnimation() {
+function stopAllPreviewMedia() {
   if (previewAnimId) {
     cancelAnimationFrame(previewAnimId);
     previewAnimId = null;
   }
+  if (activeAudioCtx) {
+    activeAudioCtx.stop();
+    activeAudioCtx = null;
+  }
+  if ('speechSynthesis' in window) {
+    window.speechSynthesis.cancel();
+  }
+}
+
+function previewCurrentCutAnimation() {
+  stopAllPreviewMedia();
   const cutIndex = appState.currentCutIndex;
   const cut = appState.cuts[cutIndex];
   if (!cut) return;
@@ -805,14 +1178,27 @@ function previewCurrentCutAnimation() {
   setViewMode('single');
   const spec = getCutAnimationSpec(cut);
   const startTime = performance.now();
+  const triggeredSet = new Set();
+
+  const audioEngine = new WebtoonAudioEngine();
+  activeAudioCtx = audioEngine;
+  if (appState.audioOptions.enableBgm) {
+    audioEngine.startGentleBgm();
+  }
 
   function step(now) {
     const elapsedSec = (now - startTime) / 1000;
     if (elapsedSec <= spec.totalDuration) {
-      renderAnimatedCutFrame(ctx, cutIndex, elapsedSec, spec);
+      renderAnimatedCutFrame(ctx, cutIndex, elapsedSec, spec, (item, curCut) => {
+        if (appState.audioOptions.enableVoice && (item.type || '').toLowerCase() === 'bubble') {
+          const role = detectBubbleSpeakerRole(item, curCut);
+          audioEngine.playCharacterDialogueVoice(item.text, role);
+          speakBubbleTextTTS(item.text, role);
+        }
+      }, triggeredSet);
       previewAnimId = requestAnimationFrame(step);
     } else {
-      previewAnimId = null;
+      stopAllPreviewMedia();
       renderAll();
     }
   }
@@ -859,10 +1245,7 @@ function drawSelectionBox(c, item) {
 }
 
 function renderAll() {
-  if (previewAnimId) {
-    cancelAnimationFrame(previewAnimId);
-    previewAnimId = null;
-  }
+  stopAllPreviewMedia();
   renderCutToContext(ctx, appState.currentCutIndex, true);
   document.getElementById('cutCountLabel').textContent = appState.cuts.length;
   document.getElementById('currentCutIndicator').textContent = `${appState.currentCutIndex + 1} / ${appState.cuts.length} 컷`;
@@ -957,10 +1340,7 @@ function hitTestHandle(pos, item) {
 
 function bindCanvasMouseEvents() {
   mainCanvas.addEventListener('mousedown', (e) => {
-    if (previewAnimId) {
-      cancelAnimationFrame(previewAnimId);
-      previewAnimId = null;
-    }
+    stopAllPreviewMedia();
     const pos = getCanvasMousePos(e);
     const cut = appState.cuts[appState.currentCutIndex];
     if (!cut) return;
@@ -969,6 +1349,7 @@ function bindCanvasMouseEvents() {
       const selItem = cut.items[appState.selectedLayerIndex];
       const handleMode = hitTestHandle(pos, selItem);
       if (handleMode) {
+        saveHistorySnapshot();
         dragState = {
           isDragging: true,
           mode: handleMode,
@@ -997,6 +1378,7 @@ function bindCanvasMouseEvents() {
     }
     appState.selectedLayerIndex = foundIdx;
     if (foundIdx >= 0) {
+      saveHistorySnapshot();
       const selItem = cut.items[foundIdx];
       dragState = {
         isDragging: true,
@@ -1106,7 +1488,8 @@ function syncInspectorWithSelection() {
 
   const type = (item.type || '').toLowerCase();
   if (type === 'bubble') {
-    badge.textContent = '💬 말풍선 (노란 점=꼬리)';
+    const role = detectBubbleSpeakerRole(item, cut);
+    badge.textContent = role === 'doctor' ? '🐯 호랑이 박사 톤' : '🐰 토끼 시민 톤';
     bubbleInsp.classList.remove('hidden');
     document.getElementById('speakerInput').value = item.speaker || '';
     document.getElementById('dialogueTextarea').value = item.text || '';
@@ -1132,6 +1515,7 @@ function bindUIEvents() {
 
   document.getElementById('btnClearWorkspace').addEventListener('click', () => {
     if (!confirm('현재 작업 중인 자막, 말풍선, 이미지를 모두 비우고 초기 상태로 되돌릴까요?')) return;
+    saveHistorySnapshot();
     loadedImages = {};
     DEFAULT_ASSETS.backgrounds = DEFAULT_ASSETS.backgrounds.filter(b => !b.id.startsWith('ai_scene_') && !b.id.startsWith('custom_'));
     document.getElementById('jsonScriptInput').value = '';
@@ -1174,6 +1558,7 @@ function bindUIEvents() {
   });
 
   document.getElementById('btnAddCut').addEventListener('click', () => {
+    saveHistorySnapshot();
     appState.cuts.push({
       background: 'bg_empty.png',
       scenePrompt: '',
@@ -1194,6 +1579,7 @@ function bindUIEvents() {
   document.getElementById('btnDuplicateCut').addEventListener('click', () => {
     const cur = appState.cuts[appState.currentCutIndex];
     if (!cur) return;
+    saveHistorySnapshot();
     const clone = JSON.parse(JSON.stringify(cur));
     appState.cuts.splice(appState.currentCutIndex + 1, 0, clone);
     appState.currentCutIndex++;
@@ -1202,6 +1588,7 @@ function bindUIEvents() {
 
   document.getElementById('btnDeleteCut').addEventListener('click', () => {
     if (appState.cuts.length <= 1) return alert('최소 1개의 컷은 유지해야 합니다.');
+    saveHistorySnapshot();
     appState.cuts.splice(appState.currentCutIndex, 1);
     appState.currentCutIndex = Math.max(0, appState.currentCutIndex - 1);
     appState.selectedLayerIndex = -1;
@@ -1210,28 +1597,29 @@ function bindUIEvents() {
 
   document.getElementById('bgSelect').addEventListener('change', (e) => {
     const cut = appState.cuts[appState.currentCutIndex];
-    if (cut) { cut.background = e.target.value; renderAll(); }
+    if (cut) { saveHistorySnapshot(); cut.background = e.target.value; renderAll(); }
   });
 
   document.getElementById('btnToggleBlur').addEventListener('click', () => {
     const cut = appState.cuts[appState.currentCutIndex];
-    if (cut) { cut.blurBg = !cut.blurBg; renderAll(); }
+    if (cut) { saveHistorySnapshot(); cut.blurBg = !cut.blurBg; renderAll(); }
   });
 
   document.getElementById('btnToggleDark').addEventListener('click', () => {
     const cut = appState.cuts[appState.currentCutIndex];
-    if (cut) { cut.darkMood = !cut.darkMood; renderAll(); }
+    if (cut) { saveHistorySnapshot(); cut.darkMood = !cut.darkMood; renderAll(); }
   });
 
   document.getElementById('btnToggleSpeed').addEventListener('click', () => {
     const cut = appState.cuts[appState.currentCutIndex];
-    if (cut) { cut.speedLines = !cut.speedLines; renderAll(); }
+    if (cut) { saveHistorySnapshot(); cut.speedLines = !cut.speedLines; renderAll(); }
   });
 
+  document.getElementById('cutHeaderInput').addEventListener('focus', saveHistorySnapshot);
   document.getElementById('cutHeaderInput').addEventListener('input', (e) => {
     const cut = appState.cuts[appState.currentCutIndex];
-    if (cut) { 
-      cut.headerText = e.target.value; 
+    if (cut) {
+      cut.headerText = e.target.value;
       const headerLines = cut.headerText ? cut.headerText.split('\n').length : 1;
       const safeY = headerLines >= 2 ? 280 : 220;
       (cut.items || []).forEach(item => {
@@ -1239,10 +1627,11 @@ function bindUIEvents() {
           item.y = safeY;
         }
       });
-      renderAll(); 
+      renderAll();
     }
   });
 
+  document.getElementById('cutFooterInput').addEventListener('focus', saveHistorySnapshot);
   document.getElementById('cutFooterInput').addEventListener('input', (e) => {
     const cut = appState.cuts[appState.currentCutIndex];
     if (cut) { cut.footerText = e.target.value; renderAll(); }
@@ -1250,9 +1639,10 @@ function bindUIEvents() {
 
   document.getElementById('captionStyleSelect').addEventListener('change', (e) => {
     const cut = appState.cuts[appState.currentCutIndex];
-    if (cut) { cut.captionStyle = e.target.value; renderAll(); }
+    if (cut) { saveHistorySnapshot(); cut.captionStyle = e.target.value; renderAll(); }
   });
 
+  document.getElementById('captionSizeInput').addEventListener('focus', saveHistorySnapshot);
   document.getElementById('captionSizeInput').addEventListener('input', (e) => {
     const cut = appState.cuts[appState.currentCutIndex];
     if (cut) { cut.captionSize = Number(e.target.value) || 46; renderAll(); }
@@ -1260,6 +1650,7 @@ function bindUIEvents() {
 
   document.getElementById('btnAddBubble').addEventListener('click', () => {
     const cut = appState.cuts[appState.currentCutIndex];
+    saveHistorySnapshot();
     const headerLines = cut.headerText ? cut.headerText.split('\n').length : 1;
     const safeY = headerLines >= 2 ? 280 : 220;
 
@@ -1282,6 +1673,7 @@ function bindUIEvents() {
 
   document.getElementById('btnAddSticker').addEventListener('click', () => {
     const cut = appState.cuts[appState.currentCutIndex];
+    saveHistorySnapshot();
     cut.items.push({
       type: 'sticker',
       stickerId: 'sticker_crowd.png',
@@ -1294,6 +1686,7 @@ function bindUIEvents() {
   document.getElementById('btnClearCutBubbles').addEventListener('click', () => {
     const cut = appState.cuts[appState.currentCutIndex];
     if (!cut) return;
+    saveHistorySnapshot();
     cut.items = [];
     appState.selectedLayerIndex = -1;
     renderAll();
@@ -1301,7 +1694,7 @@ function bindUIEvents() {
 
   document.getElementById('btnFlipX').addEventListener('click', () => {
     const item = getSelectedItem();
-    if (item) { item.flipX = !item.flipX; renderAll(); }
+    if (item) { saveHistorySnapshot(); item.flipX = !item.flipX; renderAll(); }
   });
 
   const commonCtrl = document.getElementById('commonLayerControls');
@@ -1316,6 +1709,7 @@ function bindUIEvents() {
       swapBtn.addEventListener('click', () => {
         const item = getSelectedItem();
         if (item && (item.type || '').toLowerCase() === 'bubble') {
+          saveHistorySnapshot();
           item.x = CANVAS_W - (item.x + item.width);
           if (typeof item.tailX === 'number') {
             item.tailX = CANVAS_W - item.tailX;
@@ -1331,6 +1725,7 @@ function bindUIEvents() {
     const cut = appState.cuts[appState.currentCutIndex];
     const idx = appState.selectedLayerIndex;
     if (cut && idx >= 0 && idx < cut.items.length - 1) {
+      saveHistorySnapshot();
       const [item] = cut.items.splice(idx, 1);
       cut.items.push(item);
       appState.selectedLayerIndex = cut.items.length - 1;
@@ -1342,6 +1737,7 @@ function bindUIEvents() {
     const cut = appState.cuts[appState.currentCutIndex];
     const idx = appState.selectedLayerIndex;
     if (cut && idx > 0) {
+      saveHistorySnapshot();
       const [item] = cut.items.splice(idx, 1);
       cut.items.unshift(item);
       appState.selectedLayerIndex = 0;
@@ -1353,33 +1749,38 @@ function bindUIEvents() {
     const cut = appState.cuts[appState.currentCutIndex];
     const idx = appState.selectedLayerIndex;
     if (cut && idx >= 0) {
+      saveHistorySnapshot();
       cut.items.splice(idx, 1);
       appState.selectedLayerIndex = -1;
       renderAll();
     }
   });
 
+  document.getElementById('speakerInput').addEventListener('focus', saveHistorySnapshot);
   document.getElementById('speakerInput').addEventListener('input', (e) => {
     const item = getSelectedItem();
     if (item) { item.speaker = e.target.value; renderAll(); }
   });
+
+  document.getElementById('dialogueTextarea').addEventListener('focus', saveHistorySnapshot);
   document.getElementById('dialogueTextarea').addEventListener('input', (e) => {
     const item = getSelectedItem();
-    if (item) { 
-      item.text = e.target.value; 
-      // 대사가 수정되면 말풍선 높이도 글자 줄 수에 맞춰 즉시 자동 확장
+    if (item) {
+      item.text = e.target.value;
       const lineCount = item.text.split('\n').length;
       item.height = Math.max(210, lineCount * (item.fontSize * 1.5) + 75);
-      renderAll(); 
+      renderAll();
     }
   });
+
   document.getElementById('bubbleStyleSelect').addEventListener('change', (e) => {
     const item = getSelectedItem();
-    if (item) { item.bubbleStyle = e.target.value; renderAll(); }
+    if (item) { saveHistorySnapshot(); item.bubbleStyle = e.target.value; renderAll(); }
   });
   document.getElementById('bubbleTailSelect').addEventListener('change', (e) => {
     const item = getSelectedItem();
     if (item) {
+      saveHistorySnapshot();
       item.tailDir = e.target.value;
       if (e.target.value === 'left' || e.target.value === 'right' || e.target.value === 'bottom') {
         const pt = getDefaultTailPoint(item);
@@ -1389,26 +1790,33 @@ function bindUIEvents() {
       renderAll();
     }
   });
+
+  document.getElementById('fontSizeInput').addEventListener('focus', saveHistorySnapshot);
   document.getElementById('fontSizeInput').addEventListener('input', (e) => {
     const item = getSelectedItem();
-    if (item) { 
-      item.fontSize = Number(e.target.value) || 36; 
+    if (item) {
+      item.fontSize = Number(e.target.value) || 36;
       const lineCount = (item.text || '').split('\n').length;
       item.height = Math.max(210, lineCount * (item.fontSize * 1.5) + 75);
-      renderAll(); 
+      renderAll();
     }
   });
+
+  document.getElementById('textColorInput').addEventListener('focus', saveHistorySnapshot);
   document.getElementById('textColorInput').addEventListener('input', (e) => {
     const item = getSelectedItem();
     if (item) { item.textColor = e.target.value; renderAll(); }
   });
+
+  document.getElementById('bubbleBgColorInput').addEventListener('focus', saveHistorySnapshot);
   document.getElementById('bubbleBgColorInput').addEventListener('input', (e) => {
     const item = getSelectedItem();
     if (item) { item.bgColor = e.target.value; renderAll(); }
   });
+
   document.getElementById('stickerSelect').addEventListener('change', (e) => {
     const item = getSelectedItem();
-    if (item) { item.stickerId = e.target.value; renderAll(); }
+    if (item) { saveHistorySnapshot(); item.stickerId = e.target.value; renderAll(); }
   });
 
   document.getElementById('castPresetSelect').addEventListener('change', (e) => {
@@ -1516,7 +1924,11 @@ async function downloadAllCutsZip() {
   }
 }
 
+// ============================================================================
+// 7. 원클릭 MP4 동영상 저장 (BGM + 토끼/호랑이 대화 보이스 오디오 트랙 결합)
+// ============================================================================
 async function downloadReelsMp4() {
+  stopAllPreviewMedia();
   const epName = getSanitizedEpisodeName();
   const overlay = document.getElementById('loadingOverlay');
   const loadingText = document.getElementById('loadingText');
@@ -1528,7 +1940,16 @@ async function downloadReelsMp4() {
   const exportCtx = exportCanvas.getContext('2d');
   const fps = 30;
 
+  const hasAudio = appState.audioOptions.enableBgm || appState.audioOptions.enableVoice;
+
   try {
+    // 오디오가 켜져 있으면 실시간 캔버스+WebAudio 결합 스트림으로 MP4/WebM 녹화
+    if (hasAudio) {
+      await recordVideoWithAudio(exportCanvas, exportCtx, fps, epName, loadingText);
+      return;
+    }
+
+    // 오디오가 모두 꺼져 있을 때는 초고속 무음 WebCodecs 인코딩
     if (typeof VideoEncoder !== 'undefined' && typeof Mp4Muxer !== 'undefined') {
       const codecCandidates = ['avc1.64002a', 'avc1.4d002a', 'avc1.42002a', 'avc1.42E01E'];
       let chosenCodec = null;
@@ -1591,7 +2012,7 @@ async function downloadReelsMp4() {
       }
     }
 
-    await recordFallbackVideo(exportCanvas, exportCtx, fps, epName, loadingText);
+    await recordVideoWithAudio(exportCanvas, exportCtx, fps, epName, loadingText, true);
   } catch (err) {
     alert('동영상 생성 중 오류가 발생했습니다: ' + err.message);
   } finally {
@@ -1599,36 +2020,67 @@ async function downloadReelsMp4() {
   }
 }
 
-async function recordFallbackVideo(exportCanvas, exportCtx, fps, epName, loadingText) {
-  const stream = exportCanvas.captureStream(fps);
-  const mimeTypes = ['video/mp4', 'video/webm;codecs=h264', 'video/webm'];
+async function recordVideoWithAudio(exportCanvas, exportCtx, fps, epName, loadingText, forceMute = false) {
+  const videoStream = exportCanvas.captureStream(fps);
+  const combinedTracks = [...videoStream.getVideoTracks()];
+
+  let audioEngine = null;
+  if (!forceMute && (appState.audioOptions.enableBgm || appState.audioOptions.enableVoice)) {
+    audioEngine = new WebtoonAudioEngine();
+    if (appState.audioOptions.enableBgm) {
+      audioEngine.startGentleBgm();
+    }
+    const audioTracks = audioEngine.getAudioStream().getAudioTracks();
+    combinedTracks.push(...audioTracks);
+  }
+
+  const finalStream = new MediaStream(combinedTracks);
+  const mimeTypes = [
+    'video/mp4;codecs=avc1,mp4a.40.2',
+    'video/mp4',
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=h264,opus',
+    'video/webm'
+  ];
   const selectedMime = mimeTypes.find(m => MediaRecorder.isTypeSupported(m)) || '';
-  const recorder = new MediaRecorder(stream, selectedMime ? { mimeType: selectedMime, videoBitsPerSecond: 5_000_000 } : {});
+  const recorder = new MediaRecorder(finalStream, selectedMime ? { mimeType: selectedMime, videoBitsPerSecond: 5_000_000 } : {});
   const chunks = [];
 
   recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunks.push(e.data); };
   const stopPromise = new Promise(resolve => { recorder.onstop = resolve; });
   recorder.start();
 
-  for (let i = 0; i < appState.cuts.length; i++) {
-    const cut = appState.cuts[i];
-    const spec = getCutAnimationSpec(cut);
-    const startMs = performance.now();
+  try {
+    for (let i = 0; i < appState.cuts.length; i++) {
+      const cut = appState.cuts[i];
+      const spec = getCutAnimationSpec(cut);
+      const startMs = performance.now();
+      const triggeredSet = new Set();
 
-    while (true) {
-      const elapsedSec = (performance.now() - startMs) / 1000;
-      if (elapsedSec > spec.totalDuration) break;
-      loadingText.textContent = `🎬 녹화 중... (${i + 1} / ${appState.cuts.length}컷)`;
-      renderAnimatedCutFrame(exportCtx, i, elapsedSec, spec);
-      await new Promise(r => requestAnimationFrame(r));
+      while (true) {
+        const elapsedSec = (performance.now() - startMs) / 1000;
+        if (elapsedSec > spec.totalDuration) break;
+
+        loadingText.textContent = `🎬 BGM·대화 목소리 합성 녹화 중... (${i + 1} / ${appState.cuts.length}컷)`;
+        renderAnimatedCutFrame(exportCtx, i, elapsedSec, spec, (item, curCut) => {
+          if (audioEngine && appState.audioOptions.enableVoice && (item.type || '').toLowerCase() === 'bubble') {
+            const role = detectBubbleSpeakerRole(item, curCut);
+            audioEngine.playCharacterDialogueVoice(item.text, role);
+            speakBubbleTextTTS(item.text, role);
+          }
+        }, triggeredSet);
+
+        await new Promise(r => requestAnimationFrame(r));
+      }
     }
+  } finally {
+    recorder.stop();
+    await stopPromise;
+    if (audioEngine) audioEngine.stop();
   }
 
-  recorder.stop();
-  await stopPromise;
-
   const ext = selectedMime.includes('mp4') ? 'mp4' : 'webm';
-  const blob = new Blob(chunks, { type: selectedMime || 'video/webm' });
+  const blob = new Blob(chunks, { type: selectedMime || 'video/mp4' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -1703,6 +2155,5 @@ function openArtPromptModal() {
   }).join('\n');
 
   document.getElementById('artPromptText').value = header + scenes;
-  document.getElementById('artPropertyModal')?.classList.remove('hidden');
   document.getElementById('artPromptModal').classList.remove('hidden');
 }
