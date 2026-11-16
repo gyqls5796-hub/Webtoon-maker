@@ -1,6 +1,6 @@
 /**
  * 인스타그램 10컷 웹툰 자동 제작기 (원포인트 스토리툰 + 자유 꼬리 + 멀티 세계관 + 자동 시퀀스 MP4 에디션)
- * - 상단 자막과 말풍선 겹침 방지 오토 레이아웃(2줄 이상 시 y좌표 260px 자동 강제 하향) 반영 버전
+ * - 상단 자막 겹침 원천 차단 오토 레이아웃 및 2단계 작화 구도 자동 연동 버전
  */
 
 const CANVAS_W = 1080;
@@ -41,11 +41,11 @@ const WORLD_PRESETS = {
   },
   aquatic: {
     name: '물가·수생 생물 (수인성/모기 유충 테마)',
-    desc: '1) 연구원: 흰색 실험실 가운을 입은 부지런한 수달 박사.\n  2) 시민: 초록 청개구리 캐릭터.'
+    desc: '1) 연구원: 흰색 연구원 가운을 입은 부지런한 수달 박사.\n  2) 시민: 초록 청개구리 캐릭터.'
   },
   insect: {
     name: '곤충·절지동물 월드 (매개체 테마)',
-    desc: '1) 연구원: 흰색 실험실 가운을 입은 사마귀 박사.\n  2) 시민: 동글동글한 무당벌레 캐릭터.'
+    desc: '1) 연구원: 흰색 연구원 가운을 입은 사마귀 박사.\n  2) 시민: 동글동글한 무당벌레 캐릭터.'
   }
 };
 
@@ -103,7 +103,7 @@ function getSampleScriptData() {
         headerText: "선명한 바람이 부는 주말,\n토끼 시민의 설레는 산책 준비!",
         footerText: "야외활동 전 필수 수칙 1탄: 밝은색 긴옷 착용",
         items: [
-          { type: "bubble", bubbleStyle: "round", tailDir: "left", speaker: "", text: "날씨도 좋은데 가벼운 차림으로\n뒷산 풀밭 산책 다녀와야지!", fontSize: 38, textColor: "#111827", bgColor: "#ffffff", x: 90, y: 260, width: 900, height: 185, tailX: 300, tailY: 460 }
+          { type: "bubble", bubbleStyle: "round", tailDir: "left", speaker: "", text: "날씨도 좋은데 가벼운 차림으로\n뒷산 풀밭 산책 다녀와야지!", fontSize: 38, textColor: "#111827", bgColor: "#ffffff", x: 90, width: 900, height: 185, tailX: 300, tailY: 460 }
         ]
       }
     ]
@@ -247,9 +247,9 @@ function normalizeBubbleLayout(b, headerText = '') {
   const fontSize = Number(b.fontSize) || 38;
   const autoHeight = Math.max(160, lineCount * (fontSize * 1.45) + 65);
 
-  // 상단 자막이 2줄 이상이면 260px로 강제 하향하여 겹침 방지
+  // 상단 자막 줄 수에 따라 y 좌표를 무조건 안전한 위치(2줄일 때 270px)로 자동 계산 강제 적용
   const headerLines = headerText ? headerText.split('\n').length : 1;
-  const forcedSafeY = headerLines >= 2 ? 260 : 210;
+  const safeY = headerLines >= 2 ? 270 : 210;
 
   const normalized = {
     type: 'bubble',
@@ -261,7 +261,7 @@ function normalizeBubbleLayout(b, headerText = '') {
     textColor: b.textColor || '#111827',
     bgColor: b.bgColor || '#ffffff',
     x: typeof b.x === 'number' ? b.x : 90,
-    y: forcedSafeY,
+    y: safeY,
     width: typeof b.width === 'number' ? b.width : 900,
     height: typeof b.height === 'number' ? Math.min(b.height, autoHeight + 30) : autoHeight
   };
@@ -1224,7 +1224,17 @@ function bindUIEvents() {
 
   document.getElementById('cutHeaderInput').addEventListener('input', (e) => {
     const cut = appState.cuts[appState.currentCutIndex];
-    if (cut) { cut.headerText = e.target.value; renderAll(); }
+    if (cut) { 
+      cut.headerText = e.target.value; 
+      // 상단 자막이 바뀔 때 말풍선 y 좌표도 즉시 자동 재계산
+      (cut.items || []).forEach(item => {
+        if ((item.type || '').toLowerCase() === 'bubble') {
+          const headerLines = cut.headerText ? cut.headerText.split('\n').length : 1;
+          item.y = headerLines >= 2 ? 270 : 210;
+        }
+      });
+      renderAll(); 
+    }
   });
 
   document.getElementById('cutFooterInput').addEventListener('input', (e) => {
@@ -1244,6 +1254,9 @@ function bindUIEvents() {
 
   document.getElementById('btnAddBubble').addEventListener('click', () => {
     const cut = appState.cuts[appState.currentCutIndex];
+    const headerLines = cut.headerText ? cut.headerText.split('\n').length : 1;
+    const safeY = headerLines >= 2 ? 270 : 210;
+
     const newBubble = {
       type: 'bubble',
       bubbleStyle: 'round',
@@ -1253,7 +1266,7 @@ function bindUIEvents() {
       fontSize: 38,
       textColor: '#111827',
       bgColor: '#ffffff',
-      x: 90, y: 260, width: 900, height: 185,
+      x: 90, y: safeY, width: 900, height: 185,
       tailX: 540, tailY: 460
     };
     cut.items.push(newBubble);
@@ -1636,7 +1649,7 @@ function updateMasterPromptText() {
       "headerText": "상단 해설 자막 (2줄 이내)",
       "footerText": "하단 핵심 요약 자막",
       "items": [
-        { "type": "bubble", "bubbleStyle": "round", "tailDir": "left", "speaker": "", "text": "대사 내용", "fontSize": 38, "textColor": "#111827", "bgColor": "#ffffff", "x": 90, "y": 260, "width": 900, "height": 185, "tailX": 300, "tailY": 460 }
+        { "type": "bubble", "bubbleStyle": "round", "tailDir": "left", "speaker": "", "text": "대사 내용", "fontSize": 38, "textColor": "#111827", "bgColor": "#ffffff", "x": 90, "width": 900, "height": 185, "tailX": 300, "tailY": 460 }
       ]
     }
   ]
