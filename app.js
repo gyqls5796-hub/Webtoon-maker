@@ -1,8 +1,8 @@
 /**
- * 인스타그램 10컷 웹툰 자동 제작기 (원포인트 스토리툰 + 자유 꼬리 + 멀티 세계관 에디션)
+ * 인스타그램 10컷 웹툰 자동 제작기 (원포인트 스토리툰 + 자유 꼬리 + 멀티 세계관 + 자동 시퀀스 MP4 에디션)
  * - 1편 = 단 1가지 예방 수칙(One-Point) 집중 스토리텔링 프롬프트 내장
  * - 말풍선 본체는 고정한 채 노란색 꼬리 끝점(tailX, tailY)만 360도 자유 드래그 가능
- * - 동물, 공룡(프테라노돈·티라노), 곤충/조류(나비·부엉이) 등 감염병 특성에 맞는 멀티 세계관 지원
+ * - 말풍선 좌표(위→아래, 좌→우) 자동 인식 순차 팝업 애니메이션 및 원클릭 MP4 추출 지원
  */
 
 const CANVAS_W = 1080;
@@ -70,6 +70,8 @@ let dragState = {
   startY: 0,
   initialBox: null
 };
+
+let previewAnimId = null;
 
 const mainCanvas = document.getElementById('mainCanvas');
 const ctx = mainCanvas.getContext('2d');
@@ -384,7 +386,7 @@ function handleLocalAssetUpload(e) {
 }
 
 // ============================================================================
-// 4. 캔버스 렌더링 (360도 자유 꼬리 말풍선 렌더링 포함)
+// 4. 캔버스 렌더링 (360도 자유 꼬리 + 애니메이션 스케일/투명도 지원)
 // ============================================================================
 function drawImageCover(c, img, pad = 0) {
   const targetW = CANVAS_W + pad * 2;
@@ -407,9 +409,14 @@ function drawImageCover(c, img, pad = 0) {
   c.drawImage(img, offsetX, offsetY, drawW, drawH);
 }
 
-function drawBackgroundAndMood(c, cut) {
+function drawBackgroundAndMood(c, cut, zoomScale = 1.0) {
   const bgId = cut.background || 'bg_empty.png';
   c.save();
+  if (zoomScale !== 1.0) {
+    c.translate(CANVAS_W / 2, CANVAS_H / 2);
+    c.scale(zoomScale, zoomScale);
+    c.translate(-CANVAS_W / 2, -CANVAS_H / 2);
+  }
   if (cut.blurBg) c.filter = 'blur(12px)';
   if (loadedImages[bgId]) drawImageCover(c, loadedImages[bgId], cut.blurBg ? 30 : 0);
   else drawBuiltinBackground(c, bgId);
@@ -469,13 +476,15 @@ function drawSpeedLines(c) {
   c.restore();
 }
 
-function drawStoryCaptions(c, cut, cutNumber, totalCuts) {
+function drawStoryCaptions(c, cut, cutNumber, totalCuts, alpha = 1.0) {
+  if (alpha <= 0) return;
   const style = cut.captionStyle || 'outline';
   const fontSize = cut.captionSize || 46;
   const headerText = (cut.headerText || '').trim();
   const footerText = (cut.footerText || '').trim();
 
   c.save();
+  c.globalAlpha = alpha;
   if (style === 'bar') {
     c.fillStyle = 'rgba(15, 23, 42, 0.88)';
     c.fillRect(0, 0, CANVAS_W, 92);
@@ -538,11 +547,16 @@ function drawCaptionBlock(c, text, anchorY, position, style, fontSize) {
   }
 }
 
-function drawStickerLayer(c, item) {
+function drawStickerLayer(c, item, animState = null) {
   const { stickerId = 'sticker_crowd.png', x, y, width, height, flipX } = item;
+  if (animState && animState.alpha <= 0) return;
+
   c.save();
+  if (animState) c.globalAlpha = animState.alpha;
+  const scale = animState ? animState.scale : 1.0;
+
   c.translate(x + width / 2, y + height / 2);
-  if (flipX) c.scale(-1, 1);
+  c.scale(flipX ? -scale : scale, scale);
   c.translate(-width / 2, -height / 2);
   if (loadedImages[stickerId]) {
     c.drawImage(loadedImages[stickerId], 0, 0, width, height);
@@ -555,7 +569,9 @@ function drawStickerLayer(c, item) {
   c.restore();
 }
 
-function drawBubbleLayer(c, item) {
+function drawBubbleLayer(c, item, animState = null) {
+  if (animState && animState.alpha <= 0) return;
+
   const {
     x, y, width, height,
     text = '',
@@ -579,6 +595,14 @@ function drawBubbleLayer(c, item) {
   const ty = item.tailY;
 
   c.save();
+  if (animState) {
+    c.globalAlpha = animState.alpha;
+    if (animState.scale !== 1.0) {
+      c.translate(cx, cy);
+      c.scale(animState.scale, animState.scale);
+      c.translate(-cx, -cy);
+    }
+  }
 
   if (bubbleStyle === 'plain') {
     c.font = `900 ${fontSize}px "Jua", "Noto Sans KR", sans-serif`;
@@ -726,19 +750,123 @@ function renderCutToContext(targetCtx, cutIndex, showSelection = false) {
   if (!cut) return;
   targetCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
 
-  drawBackgroundAndMood(targetCtx, cut);
+  drawBackgroundAndMood(targetCtx, cut, 1.0);
 
   (cut.items || []).forEach((item, idx) => {
     const t = (item.type || '').toLowerCase();
-    if (t === 'bubble') drawBubbleLayer(targetCtx, item);
-    else if (t === 'sticker') drawStickerLayer(targetCtx, item);
+    if (t === 'bubble') drawBubbleLayer(targetCtx, item, null);
+    else if (t === 'sticker') drawStickerLayer(targetCtx, item, null);
 
     if (showSelection && idx === appState.selectedLayerIndex) {
       drawSelectionBox(targetCtx, item);
     }
   });
 
-  drawStoryCaptions(targetCtx, cut, cutIndex + 1, appState.cuts.length);
+  drawStoryCaptions(targetCtx, cut, cutIndex + 1, appState.cuts.length, 1.0);
+}
+
+// ============================================================================
+// 4-2. 자동 시퀀스 타임라인 계산 및 애니메이션 프레임 렌더러
+// ============================================================================
+function getCutAnimationSpec(cut) {
+  const items = cut.items || [];
+  // 만화 읽는 순서(위->아래 Y좌표 우선, 높이가 비슷하면 좌->우 X좌표)로 등장 순서 자동 계산
+  const sortedIndices = items
+    .map((item, idx) => ({ idx, x: item.x || 0, y: item.y || 0 }))
+    .sort((a, b) => {
+      if (Math.abs(a.y - b.y) > 80) return a.y - b.y;
+      return a.x - b.x;
+    })
+    .map(entry => entry.idx);
+
+  const orderMap = {};
+  sortedIndices.forEach((origIdx, seqOrder) => {
+    orderMap[origIdx] = seqOrder;
+  });
+
+  const introDelay = 0.35; // 컷 시작 후 첫 말풍선 등장까지 대기(초)
+  const stepInterval = 0.55; // 말풍선 간 등장 간격(초)
+  const popDuration = 0.28; // 팝업 애니메이션 길이(초)
+
+  // 글자 수에 비례해 읽는 여유 시간 자동 부여 (최소 1.6초 ~ 최대 2.8초)
+  const totalChars = items.reduce((acc, it) => acc + String(it.text || '').length, 0) +
+    String(cut.headerText || '').length + String(cut.footerText || '').length;
+  const readingHold = Math.min(2.8, Math.max(1.6, 1.2 + totalChars * 0.035));
+
+  const lastBubbleTime = items.length > 0
+    ? introDelay + (items.length - 1) * stepInterval + popDuration
+    : introDelay;
+
+  const totalDuration = lastBubbleTime + readingHold;
+
+  return { orderMap, introDelay, stepInterval, popDuration, totalDuration };
+}
+
+function easeOutBack(x) {
+  const c1 = 1.70158;
+  const c3 = c1 + 1;
+  return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
+}
+
+function renderAnimatedCutFrame(targetCtx, cutIndex, elapsedSec, spec) {
+  const cut = appState.cuts[cutIndex];
+  if (!cut) return;
+  targetCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+
+  // 배경 은은한 줌인 (Ken Burns 효과: 1.00 -> 1.035)
+  const progress = Math.min(1, Math.max(0, elapsedSec / spec.totalDuration));
+  const zoomScale = 1.0 + progress * 0.035;
+  drawBackgroundAndMood(targetCtx, cut, zoomScale);
+
+  // 각 말풍선/스티커를 자동 시퀀스 순서대로 팝업 렌더링
+  (cut.items || []).forEach((item, idx) => {
+    const seqOrder = spec.orderMap[idx] ?? idx;
+    const appearTime = spec.introDelay + seqOrder * spec.stepInterval;
+    const localT = (elapsedSec - appearTime) / spec.popDuration;
+
+    if (localT <= 0) return; // 아직 등장 전
+
+    let alpha = 1.0;
+    let scale = 1.0;
+    if (localT < 1.0) {
+      alpha = Math.min(1, localT * 1.8);
+      scale = 0.65 + 0.35 * easeOutBack(localT);
+    }
+
+    const t = (item.type || '').toLowerCase();
+    if (t === 'bubble') drawBubbleLayer(targetCtx, item, { alpha, scale });
+    else if (t === 'sticker') drawStickerLayer(targetCtx, item, { alpha, scale });
+  });
+
+  // 상하단 사연 자막은 컷 시작 시 부드럽게 페이드인
+  const captionAlpha = Math.min(1, elapsedSec / 0.25);
+  drawStoryCaptions(targetCtx, cut, cutIndex + 1, appState.cuts.length, captionAlpha);
+}
+
+function previewCurrentCutAnimation() {
+  if (previewAnimId) {
+    cancelAnimationFrame(previewAnimId);
+    previewAnimId = null;
+  }
+  const cutIndex = appState.currentCutIndex;
+  const cut = appState.cuts[cutIndex];
+  if (!cut) return;
+
+  setViewMode('single');
+  const spec = getCutAnimationSpec(cut);
+  const startTime = performance.now();
+
+  function step(now) {
+    const elapsedSec = (now - startTime) / 1000;
+    if (elapsedSec <= spec.totalDuration) {
+      renderAnimatedCutFrame(ctx, cutIndex, elapsedSec, spec);
+      previewAnimId = requestAnimationFrame(step);
+    } else {
+      previewAnimId = null;
+      renderAll();
+    }
+  }
+  previewAnimId = requestAnimationFrame(step);
 }
 
 function drawSelectionBox(c, item) {
@@ -781,6 +909,10 @@ function drawSelectionBox(c, item) {
 }
 
 function renderAll() {
+  if (previewAnimId) {
+    cancelAnimationFrame(previewAnimId);
+    previewAnimId = null;
+  }
   renderCutToContext(ctx, appState.currentCutIndex, true);
   document.getElementById('cutCountLabel').textContent = appState.cuts.length;
   document.getElementById('currentCutIndicator').textContent = `${appState.currentCutIndex + 1} / ${appState.cuts.length} 컷`;
@@ -878,6 +1010,10 @@ function hitTestHandle(pos, item) {
 
 function bindCanvasMouseEvents() {
   mainCanvas.addEventListener('mousedown', (e) => {
+    if (previewAnimId) {
+      cancelAnimationFrame(previewAnimId);
+      previewAnimId = null;
+    }
     const pos = getCanvasMousePos(e);
     const cut = appState.cuts[appState.currentCutIndex];
     if (!cut) return;
@@ -1083,6 +1219,7 @@ function bindUIEvents() {
 
   document.getElementById('tabSingleView').addEventListener('click', () => setViewMode('single'));
   document.getElementById('tabGridView').addEventListener('click', () => setViewMode('grid'));
+  document.getElementById('btnPreviewCutAnim').addEventListener('click', previewCurrentCutAnimation);
 
   document.getElementById('btnPrevCut').addEventListener('click', () => {
     if (appState.currentCutIndex > 0) { appState.currentCutIndex--; appState.selectedLayerIndex = -1; renderAll(); }
@@ -1315,6 +1452,7 @@ function bindUIEvents() {
 
   document.getElementById('btnDownloadCurrent').addEventListener('click', downloadCurrentCutPng);
   document.getElementById('btnDownloadZip').addEventListener('click', downloadAllCutsZip);
+  document.getElementById('btnDownloadMp4').addEventListener('click', downloadReelsMp4);
 }
 
 function getSelectedItem() {
@@ -1323,7 +1461,7 @@ function getSelectedItem() {
 }
 
 // ============================================================================
-// 7. 맞춤 파일명 저장 및 ZIP 다운로드
+// 7. 맞춤 파일명 저장, ZIP 다운로드 & 원클릭 MP4 동영상 생성
 // ============================================================================
 function getSanitizedEpisodeName() {
   const raw = document.getElementById('episodeTitleInput').value.trim();
@@ -1388,6 +1526,144 @@ async function downloadAllCutsZip() {
   } finally {
     overlay.classList.add('hidden');
   }
+}
+
+async function downloadReelsMp4() {
+  const epName = getSanitizedEpisodeName();
+  const overlay = document.getElementById('loadingOverlay');
+  const loadingText = document.getElementById('loadingText');
+  overlay.classList.remove('hidden');
+
+  const exportCanvas = document.createElement('canvas');
+  exportCanvas.width = CANVAS_W;
+  exportCanvas.height = CANVAS_H;
+  const exportCtx = exportCanvas.getContext('2d');
+  const fps = 30;
+
+  try {
+    // 1순위: WebCodecs API + mp4-muxer (초고속 H.264 MP4 직접 인코딩)
+    if (typeof VideoEncoder !== 'undefined' && typeof Mp4Muxer !== 'undefined') {
+      const codecCandidates = ['avc1.64002a', 'avc1.4d002a', 'avc1.42002a', 'avc1.42E01E'];
+      let chosenCodec = null;
+      for (const c of codecCandidates) {
+        const support = await VideoEncoder.isConfigSupported({
+          codec: c,
+          width: CANVAS_W,
+          height: CANVAS_H,
+          bitrate: 5_000_000,
+          framerate: fps
+        });
+        if (support.supported) {
+          chosenCodec = c;
+          break;
+        }
+      }
+
+      if (chosenCodec) {
+        const muxer = new Mp4Muxer.Muxer({
+          target: new Mp4Muxer.ArrayBufferTarget(),
+          video: { codec: 'avc', width: CANVAS_W, height: CANVAS_H },
+          fastStart: 'in-memory'
+        });
+
+        const encoder = new VideoEncoder({
+          output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+          error: (e) => console.error(e)
+        });
+
+        encoder.configure({
+          codec: chosenCodec,
+          width: CANVAS_W,
+          height: CANVAS_H,
+          bitrate: 5_000_000,
+          framerate: fps
+        });
+
+        let globalFrameIndex = 0;
+
+        for (let i = 0; i < appState.cuts.length; i++) {
+          const cut = appState.cuts[i];
+          const spec = getCutAnimationSpec(cut);
+          const totalCutFrames = Math.round(spec.totalDuration * fps);
+
+          for (let f = 0; f < totalCutFrames; f++) {
+            if (f % 10 === 0) {
+              loadingText.textContent = `🎬 릴스 동영상 렌더링 중... (${i + 1} / ${appState.cuts.length}컷)`;
+              await new Promise(r => setTimeout(r, 0));
+            }
+            const elapsedSec = f / fps;
+            renderAnimatedCutFrame(exportCtx, i, elapsedSec, spec);
+
+            const timestampUs = Math.round((globalFrameIndex / fps) * 1_000_000);
+            const durationUs = Math.round((1 / fps) * 1_000_000);
+            const frame = new VideoFrame(exportCanvas, { timestamp: timestampUs, duration: durationUs });
+            encoder.encode(frame, { keyFrame: f === 0 });
+            frame.close();
+            globalFrameIndex++;
+          }
+        }
+
+        loadingText.textContent = 'MP4 파일 마무리 중...';
+        await encoder.flush();
+        muxer.finalize();
+
+        const { buffer } = muxer.target;
+        const blob = new Blob([buffer], { type: 'video/mp4' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${epName}.mp4`;
+        a.click();
+        URL.revokeObjectURL(url);
+        return;
+      }
+    }
+
+    // 2순위 폴백: MediaRecorder 실시간 녹화 방식
+    await recordFallbackVideo(exportCanvas, exportCtx, fps, epName, loadingText);
+  } catch (err) {
+    alert('동영상 생성 중 오류가 발생했습니다: ' + err.message);
+  } finally {
+    overlay.classList.add('hidden');
+  }
+}
+
+async function recordFallbackVideo(exportCanvas, exportCtx, fps, epName, loadingText) {
+  const stream = exportCanvas.captureStream(fps);
+  const mimeTypes = ['video/mp4', 'video/webm;codecs=h264', 'video/webm'];
+  const selectedMime = mimeTypes.find(m => MediaRecorder.isTypeSupported(m)) || '';
+  const recorder = new MediaRecorder(stream, selectedMime ? { mimeType: selectedMime, videoBitsPerSecond: 5_000_000 } : {});
+  const chunks = [];
+
+  recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunks.push(e.data); };
+  const stopPromise = new Promise(resolve => { recorder.onstop = resolve; });
+  recorder.start();
+
+  for (let i = 0; i < appState.cuts.length; i++) {
+    const cut = appState.cuts[i];
+    const spec = getCutAnimationSpec(cut);
+    const startMs = performance.now();
+
+    while (true) {
+      const elapsedSec = (performance.now() - startMs) / 1000;
+      if (elapsedSec > spec.totalDuration) break;
+      loadingText.textContent = `🎬 실시간 영상 녹화 중... (${i + 1} / ${appState.cuts.length}컷)`;
+      renderAnimatedCutFrame(exportCtx, i, elapsedSec, spec);
+      await new Promise(r => requestAnimationFrame(r));
+    }
+  }
+
+  recorder.stop();
+  await stopPromise;
+
+  const ext = selectedMime.includes('mp4') ? 'mp4' : 'webm';
+  const blob = new Blob(chunks, { type: selectedMime || 'video/webm' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${epName}.${ext}`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ============================================================================
