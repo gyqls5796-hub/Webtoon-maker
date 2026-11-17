@@ -1,9 +1,8 @@
 /**
  * 인스타그램 웹툰 & 릴스 자동 제작기
- * - 자동 표지(1컷) + 본문(2~11컷) 총 11장 구성
- * - 경상남도 감염병관리지원단 로고 자유 드래그 이동 & 크기 조절(표지 하단 초록 영역 기본 + 마지막 컷 대형 기본)
- * - 표지 하단 안내 배지 전환(숨김 / 릴스용 / 슬라이드용 + MP4 저장 시 자동 릴스 최적화)
- * - 시나리오 분위기 자동 감지 BGM + 말풍선 팝업 '뿅!' 효과음 + 4종 몰입형 모션 + 실행취소(Undo) 포함
+ * - 자동 표지(1컷, 정확히 2초 노출) + 본문(2~11컷) 총 11장 구성
+ * - 경상남도 감염병관리지원단 로고 자유 드래그 이동 & 크기 조절
+ * - 책장 넘기기(Page Turn) 전환 효과 + 미세 떨림 제거 + 시나리오 맞춤 BGM + 팝업 '뿅!' 효과음
  */
 
 const CANVAS_W = 1080;
@@ -60,7 +59,7 @@ let appState = {
   episodeTitle: '진드기_1탄_옷차림편',
   worldPreset: 'mammal',
   currentCutIndex: 0,
-  selectedLayerIndex: -1, // -1: 선택없음, -2: 지원단 로고 선택됨, 0이상: items[idx] 선택됨
+  selectedLayerIndex: -1,
   viewMode: 'single',
   cuts: [],
   audioOptions: {
@@ -77,7 +76,7 @@ let isRestoringHistory = false;
 let dragState = {
   isDragging: false,
   mode: null,
-  targetType: 'item', // 'item' | 'logo'
+  targetType: 'item',
   startX: 0,
   startY: 0,
   initialBox: null
@@ -94,10 +93,8 @@ const ctx = mainCanvas.getContext('2d');
 // ============================================================================
 function getDefaultLogoBox(isCover) {
   if (isCover) {
-    // 표지: 요청하신 하단 초록색 영역에 기본 배치
     return { x: 250, y: 1020, width: 580, height: 135 };
   }
-  // 마지막 컷 하단: 요청하신 보라색 영역처럼 큼지막한 크기로 기본 배치
   return { x: 250, y: 1055, width: 580, height: 118 };
 }
 
@@ -166,7 +163,7 @@ function createCoverCutObject(episodeTitle, firstBodyBg = 'bg_forest.png', first
     speedLines: false,
     showBottomLogo: true,
     logoBox: getDefaultLogoBox(true),
-    coverBadgeMode: 'none', // 'none'(숨김 - 릴스/피드 겸용 깔끔) | 'reels'(영상용) | 'slide'(옆으로 넘겨서 확인하기)
+    coverBadgeMode: 'none',
     captionStyle: 'outline',
     captionSize: 68,
     headerText: formatEpisodeDisplayTitle(episodeTitle),
@@ -342,7 +339,6 @@ function injectToolbarEnhancements() {
     });
   }
 
-  // 우측 패널에 표지 하단 안내 문구 모드 & 로고 기본위치 복원 버튼 주입
   const bottomLogoBtn = document.getElementById('btnToggleBottomLogo');
   if (bottomLogoBtn && !document.getElementById('coverBadgeControlWrap')) {
     const wrap = document.createElement('div');
@@ -354,7 +350,7 @@ function injectToolbarEnhancements() {
         <label for="coverBadgeModeSelect" style="color:#93c5fd;">📕 표지 하단 안내 문구 (릴스/피드 선택)</label>
         <select id="coverBadgeModeSelect">
           <option value="none">🚫 표시 안 함 (릴스·피드 겸용 깔끔 추천)</option>
-          <option value="reels">🎬 릴스·영상용 (▶ 감염병 예방 가이드)</option>
+          <option value="reels">🎬 릴스·영상용 (▶ 감염병 예방 숏폼 가이드)</option>
           <option value="slide">📱 슬라이드용 (▶ 옆으로 넘겨서 확인하기)</option>
         </select>
       </div>
@@ -546,6 +542,38 @@ class WebtoonAudioEngine {
     gain.connect(this.masterGain);
     osc.start(now);
     osc.stop(now + 0.12);
+  }
+
+  // 책장 넘길 때 사락~ 하는 부드러운 종이 스침 효과음
+  playPageFlipSound() {
+    if (this.isStopped) return;
+    const now = this.ctx.currentTime;
+    const duration = 0.22;
+    const bufferSize = Math.floor(this.ctx.sampleRate * duration);
+    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.sin((i / bufferSize) * Math.PI);
+    }
+
+    const noise = this.ctx.createBufferSource();
+    noise.buffer = buffer;
+
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(900, now);
+    filter.frequency.exponentialRampToValueAtTime(2200, now + duration);
+    filter.Q.value = 1.4;
+
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.045, now + 0.06);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+    noise.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.masterGain);
+    noise.start(now);
   }
 
   stop() {
@@ -955,7 +983,6 @@ function drawBuiltinBackground(c, bgId, isCover = false) {
   c.fillRect(0, 0, CANVAS_W, CANVAS_H);
 }
 
-// 공용 지원단 로고 박스 렌더링 (cut.logoBox 좌표·크기를 그대로 사용하므로 드래그·리사이즈 완벽 연동)
 function drawOrgLogoBox(c, cut, alpha = 1.0, offsetY = 0) {
   if (!cut.showBottomLogo || alpha <= 0) return;
   const box = ensureCutLogoBox(cut);
@@ -998,14 +1025,12 @@ function drawOrgLogoBox(c, cut, alpha = 1.0, offsetY = 0) {
   c.restore();
 }
 
-// 표지 전용 렌더링 (제목 중앙 배치 + 하단 초록 영역 로고 + 선택형 하단 안내 문구)
 function drawCoverLayout(c, cut, alpha = 1.0, slideOffsetY = 0, isVideoExport = false) {
   if (alpha <= 0) return;
   c.save();
   c.globalAlpha = alpha;
   c.translate(0, slideOffsetY);
 
-  // 1. 중앙 메인 제목 (headerText) - 상단 로고가 내려간 만큼 시선이 자연스럽게 중앙에 오도록 배치
   const mainTitle = (cut.headerText || formatEpisodeDisplayTitle(appState.episodeTitle)).trim();
   const titleLines = mainTitle.split('\n');
   const titleFontSize = Math.max(54, Number(cut.captionSize) || 68);
@@ -1027,7 +1052,6 @@ function drawCoverLayout(c, cut, alpha = 1.0, slideOffsetY = 0, isVideoExport = 
     c.fillText(line, CANVAS_W / 2, y);
   });
 
-  // 2. 장식 구분선
   const dividerY = titleStartY + totalTitleH + 34;
   c.strokeStyle = '#38bdf8';
   c.lineWidth = 6;
@@ -1036,7 +1060,6 @@ function drawCoverLayout(c, cut, alpha = 1.0, slideOffsetY = 0, isVideoExport = 
   c.lineTo(CANVAS_W / 2 + 120, dividerY);
   c.stroke();
 
-  // 3. 하단 부제목 / 안내 문구 (footerText)
   const subTitle = (cut.footerText || '').trim();
   if (subTitle) {
     c.font = '700 36px "Noto Sans KR", sans-serif';
@@ -1049,7 +1072,6 @@ function drawCoverLayout(c, cut, alpha = 1.0, slideOffsetY = 0, isVideoExport = 
     });
   }
 
-  // 4. 최하단 안내 배지 (영상 저장 시 '옆으로 넘겨서 확인하기'는 자동으로 숨김/릴스 문구로 대체)
   let badgeMode = cut.coverBadgeMode || 'none';
   if (isVideoExport && badgeMode === 'slide') {
     badgeMode = 'none';
@@ -1070,7 +1092,6 @@ function drawCoverLayout(c, cut, alpha = 1.0, slideOffsetY = 0, isVideoExport = 
 
   c.restore();
 
-  // 5. 표지 지원단 로고 박스 (기본 위치: 초록색 영역 y=1020, 사용자가 드래그·리사이즈 가능)
   drawOrgLogoBox(c, cut, alpha, slideOffsetY);
 }
 
@@ -1393,24 +1414,18 @@ function renderCutToContext(targetCtx, cutIndex, showSelection = false) {
     drawOrgLogoBox(targetCtx, cut, 1.0, 0);
   }
 
-  // 지원단 로고가 선택된 상태(-2)이면 크기 조절 및 이동 핸들 표시
   if (showSelection && appState.selectedLayerIndex === -2 && cut.showBottomLogo) {
     drawSelectionBox(targetCtx, ensureCutLogoBox(cut));
   }
 }
 
 // ============================================================================
-// 5. 4종 몰입형 모션(크로스페이드 + 말풍선 부유 + 위기 흔들림 + 자막 슬라이드업)
+// 5. 책장 넘기기(Page Turn) 전환 & 표지 2초 고정 & 부드러운 모션 엔진
 // ============================================================================
-function isTenseCut(cut) {
-  if (!cut || cut.isCover) return false;
-  const cutText = `${cut.headerText || ''} ${(cut.items || []).map(i => i.text || '').join(' ')}`;
-  return Boolean(cut.speedLines || /으악|위험|불청객|안 보여|스톱|잠깐|침투|비말/.test(cutText));
-}
-
 function getCutAnimationSpec(cut) {
+  // 표지(1컷)는 정확히 2.0초로 간결하게 노출
   if (cut.isCover) {
-    return { orderMap: {}, introDelay: 0.2, stepInterval: 0.5, popDuration: 0.3, totalDuration: 2.3, tense: false };
+    return { orderMap: {}, introDelay: 0.15, stepInterval: 0.4, popDuration: 0.25, totalDuration: 2.0 };
   }
 
   const items = cut.items || [];
@@ -1435,7 +1450,7 @@ function getCutAnimationSpec(cut) {
   const lastBubbleTime = items.length > 0 ? introDelay + (items.length - 1) * stepInterval + popDuration : introDelay;
   const totalDuration = lastBubbleTime + readingHold;
 
-  return { orderMap, introDelay, stepInterval, popDuration, totalDuration, tense: isTenseCut(cut) };
+  return { orderMap, introDelay, stepInterval, popDuration, totalDuration };
 }
 
 function easeOutBack(x) {
@@ -1446,6 +1461,46 @@ function easeOutBack(x) {
 
 function easeOutCubic(x) {
   return 1 - Math.pow(1 - x, 3);
+}
+
+function easeInOutCubic(x) {
+  return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+}
+
+// 실제 책장을 오른쪽에서 왼쪽으로 부드럽게 넘기는 전환 효과 (미세 떨림 제거)
+function drawPageTurnTransition(targetCtx, prevSnapshotCanvas, progress) {
+  const p = easeInOutCubic(Math.min(1, Math.max(0, progress)));
+  const remainingW = CANVAS_W * (1 - p);
+  if (remainingW <= 1) return;
+
+  targetCtx.save();
+
+  // 1. 아래쪽 새 페이지 위에 떨어지는 책장 그림자
+  const shadowWidth = Math.min(140, remainingW * 0.35 + 40);
+  const shadowGrad = targetCtx.createLinearGradient(remainingW, 0, remainingW + shadowWidth, 0);
+  shadowGrad.addColorStop(0, `rgba(15, 23, 42, ${0.42 * (1 - p * 0.5)})`);
+  shadowGrad.addColorStop(1, 'rgba(15, 23, 42, 0)');
+  targetCtx.fillStyle = shadowGrad;
+  targetCtx.fillRect(remainingW, 0, shadowWidth, CANVAS_H);
+
+  // 2. 넘어가고 있는 이전 페이지 영역 클리핑 및 입체 명암 표현
+  targetCtx.beginPath();
+  targetCtx.rect(0, 0, remainingW, CANVAS_H);
+  targetCtx.clip();
+
+  // 페이지가 살짝 접히면서 왼쪽으로 밀리는 원근감 반영
+  targetCtx.drawImage(prevSnapshotCanvas, -p * 45, 0, CANVAS_W, CANVAS_H);
+
+  // 3. 책장 접히는 경계선(Spine/Curl) 하이라이트와 어두운 곡면 음영
+  const curlW = Math.min(90, remainingW * 0.25);
+  const curlGrad = targetCtx.createLinearGradient(remainingW - curlW, 0, remainingW, 0);
+  curlGrad.addColorStop(0, 'rgba(0, 0, 0, 0)');
+  curlGrad.addColorStop(0.65, `rgba(255, 255, 255, ${0.28 * Math.sin(p * Math.PI)})`);
+  curlGrad.addColorStop(1, `rgba(15, 23, 42, ${0.35 * Math.sin(p * Math.PI)})`);
+  targetCtx.fillStyle = curlGrad;
+  targetCtx.fillRect(remainingW - curlW, 0, curlW, CANVAS_H);
+
+  targetCtx.restore();
 }
 
 function renderAnimatedCutFrame(
@@ -1462,28 +1517,16 @@ function renderAnimatedCutFrame(
   if (!cut) return;
   targetCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
 
-  let shakeX = 0;
-  let shakeY = 0;
-  if (spec.tense && elapsedSec >= spec.introDelay && elapsedSec <= spec.introDelay + 0.22) {
-    const shakeProgress = (elapsedSec - spec.introDelay) / 0.22;
-    const decay = 1 - shakeProgress;
-    shakeX = Math.sin(shakeProgress * Math.PI * 6) * 7 * decay;
-    shakeY = Math.cos(shakeProgress * Math.PI * 5) * 4 * decay;
-  }
-
-  targetCtx.save();
-  if (shakeX !== 0 || shakeY !== 0) {
-    targetCtx.translate(shakeX, shakeY);
-  }
-
+  // 배경 부드러운 줌인 (흔들림 없이 안정적으로 진행)
   const progress = Math.min(1, Math.max(0, elapsedSec / spec.totalDuration));
-  const zoomScale = 1.0 + progress * 0.035;
+  const zoomScale = 1.0 + progress * 0.03;
   drawBackgroundAndMood(targetCtx, cut, zoomScale);
 
-  const captionT = Math.min(1, elapsedSec / 0.32);
+  // 자막 아래에서 위로 부드럽게 등장
+  const captionT = Math.min(1, elapsedSec / 0.30);
   const captionEase = easeOutCubic(captionT);
   const captionAlpha = captionEase;
-  const captionSlideY = (1 - captionEase) * 16;
+  const captionSlideY = (1 - captionEase) * 14;
 
   if (cut.isCover) {
     drawCoverLayout(targetCtx, cut, captionAlpha, captionSlideY, isVideoExport);
@@ -1508,8 +1551,9 @@ function renderAnimatedCutFrame(
         alpha = Math.min(1, localT * 1.8);
         scale = 0.65 + 0.35 * easeOutBack(localT);
       } else {
+        // 말풍선 등장 후 부드러운 미세 부유(±3.5px)
         const postAppearSec = elapsedSec - (appearTime + spec.popDuration);
-        floatY = Math.sin(postAppearSec * 2.6 + idx) * 4.0;
+        floatY = Math.sin(postAppearSec * 2.5 + idx) * 3.5;
       }
 
       const t = (item.type || '').toLowerCase();
@@ -1521,15 +1565,10 @@ function renderAnimatedCutFrame(
     drawOrgLogoBox(targetCtx, cut, captionAlpha, 0);
   }
 
-  targetCtx.restore();
-
-  const transitionDur = 0.28;
-  if (prevSnapshotCanvas && elapsedSec < transitionDur) {
-    const trProgress = easeOutCubic(elapsedSec / transitionDur);
-    targetCtx.save();
-    targetCtx.globalAlpha = 1 - trProgress;
-    targetCtx.drawImage(prevSnapshotCanvas, -trProgress * 28, 0, CANVAS_W, CANVAS_H);
-    targetCtx.restore();
+  // 이전 컷에서 현재 컷으로 넘어갈 때 0.38초간 부드러운 '책장 넘기기' 전환
+  const pageTurnDur = 0.38;
+  if (prevSnapshotCanvas && elapsedSec < pageTurnDur) {
+    drawPageTurnTransition(targetCtx, prevSnapshotCanvas, elapsedSec / pageTurnDur);
   }
 }
 
@@ -1568,6 +1607,9 @@ function previewCurrentCutAnimation() {
   activeAudioCtx = audioEngine;
   if (appState.audioOptions.enableBgm) {
     audioEngine.startScenarioBgm();
+  }
+  if (cutIndex > 0 && appState.audioOptions.enablePopSfx) {
+    audioEngine.playPageFlipSound();
   }
 
   function step(now) {
@@ -1731,7 +1773,6 @@ function hitTestHandle(pos, item) {
   return null;
 }
 
-// 캔버스 마우스 이벤트: 말풍선/스티커뿐만 아니라 지원단 로고(-2)도 자유롭게 드래그 & 리사이즈 지원
 function bindCanvasMouseEvents() {
   mainCanvas.addEventListener('mousedown', (e) => {
     stopAllPreviewMedia();
@@ -1739,7 +1780,6 @@ function bindCanvasMouseEvents() {
     const cut = appState.cuts[appState.currentCutIndex];
     if (!cut) return;
 
-    // 1. 현재 선택된 객체가 로고(-2)이거나 일반 아이템(>=0)이면 리사이즈 핸들 먼저 체크
     if (appState.selectedLayerIndex === -2 && cut.showBottomLogo) {
       const logoBox = ensureCutLogoBox(cut);
       const handleMode = hitTestHandle(pos, logoBox);
@@ -1779,7 +1819,6 @@ function bindCanvasMouseEvents() {
       }
     }
 
-    // 2. 본문 아이템 클릭 히트 테스트
     if (!cut.isCover) {
       let foundIdx = -1;
       for (let i = cut.items.length - 1; i >= 0; i--) {
@@ -1813,7 +1852,6 @@ function bindCanvasMouseEvents() {
       }
     }
 
-    // 3. 지원단 로고 박스 클릭 히트 테스트 (표지 및 로고 표시된 컷 모두 가능)
     if (cut.showBottomLogo) {
       const logoBox = ensureCutLogoBox(cut);
       if (pos.x >= logoBox.x && pos.x <= logoBox.x + logoBox.width && pos.y >= logoBox.y && pos.y <= logoBox.y + logoBox.height) {
@@ -2579,16 +2617,22 @@ async function recordVideoWithAudio(exportCanvas, exportCtx, fps, epName, loadin
       const cut = appState.cuts[i];
       if (audioEngine) {
         audioEngine.updateCutMood(cut, i, appState.cuts.length);
+        if (i > 0 && appState.audioOptions.enablePopSfx) {
+          audioEngine.playPageFlipSound();
+        }
       }
       const spec = getCutAnimationSpec(cut);
-      const startMs = performance.now();
+      const totalCutFrames = Math.round(spec.totalDuration * fps);
       const triggeredSet = new Set();
+      const cutStartTime = performance.now();
 
-      while (true) {
-        const elapsedSec = (performance.now() - startMs) / 1000;
-        if (elapsedSec > spec.totalDuration) break;
+      // 프레임 카운트 기반 고정 스케줄링으로 표지 2.0초 등 각 컷 재생 시간을 정확히 보장
+      for (let f = 0; f < totalCutFrames; f++) {
+        const elapsedSec = f / fps;
+        if (f % 10 === 0) {
+          loadingText.textContent = `🎬 표지(2초)·책장넘기기·맞춤BGM 합성 중... (${i + 1} / ${appState.cuts.length}장)`;
+        }
 
-        loadingText.textContent = `🎬 표지·모션·맞춤BGM·팝업음 합성 중... (${i + 1} / ${appState.cuts.length}장)`;
         renderAnimatedCutFrame(
           exportCtx,
           i,
@@ -2604,7 +2648,13 @@ async function recordVideoWithAudio(exportCanvas, exportCtx, fps, epName, loadin
           true
         );
 
-        await new Promise(r => requestAnimationFrame(r));
+        const targetMs = cutStartTime + ((f + 1) / fps) * 1000;
+        const waitMs = targetMs - performance.now();
+        if (waitMs > 1) {
+          await new Promise(r => setTimeout(r, waitMs));
+        } else {
+          await new Promise(r => requestAnimationFrame(r));
+        }
       }
 
       prevSnapshot.getContext('2d').drawImage(exportCanvas, 0, 0);
