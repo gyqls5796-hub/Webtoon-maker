@@ -1,9 +1,9 @@
 /**
  * 인스타그램 웹툰 & 릴스 자동 제작기
  * - 자동 표지(1컷) + 본문(2~11컷) 총 11장 구성
- * - 표지 불투명 오버레이 & 경상남도 감염병관리지원단 로고(표지 + 마지막 컷 하단) 자동 배치
- * - 시나리오 분위기 자동 감지 BGM + 말풍선 팝업 '뿅!' 효과음
- * - 4종 몰입형 모션(컷 전환 크로스페이드, 말풍선 미세 부유, 위기 컷 미세 흔들림, 자막 슬라이드업) + 실행취소(Undo) 포함
+ * - 경상남도 감염병관리지원단 로고 자유 드래그 이동 & 크기 조절(표지 하단 초록 영역 기본 + 마지막 컷 대형 기본)
+ * - 표지 하단 안내 배지 전환(숨김 / 릴스용 / 슬라이드용 + MP4 저장 시 자동 릴스 최적화)
+ * - 시나리오 분위기 자동 감지 BGM + 말풍선 팝업 '뿅!' 효과음 + 4종 몰입형 모션 + 실행취소(Undo) 포함
  */
 
 const CANVAS_W = 1080;
@@ -60,7 +60,7 @@ let appState = {
   episodeTitle: '진드기_1탄_옷차림편',
   worldPreset: 'mammal',
   currentCutIndex: 0,
-  selectedLayerIndex: -1,
+  selectedLayerIndex: -1, // -1: 선택없음, -2: 지원단 로고 선택됨, 0이상: items[idx] 선택됨
   viewMode: 'single',
   cuts: [],
   audioOptions: {
@@ -77,6 +77,7 @@ let isRestoringHistory = false;
 let dragState = {
   isDragging: false,
   mode: null,
+  targetType: 'item', // 'item' | 'logo'
   startX: 0,
   startY: 0,
   initialBox: null
@@ -89,8 +90,25 @@ const mainCanvas = document.getElementById('mainCanvas');
 const ctx = mainCanvas.getContext('2d');
 
 // ============================================================================
-// 0. 지원단 로고 저장/불러오기 & 표지(Cover) 자동 생성 헬퍼
+// 0. 지원단 로고 박스 기본 좌표 계산 & 저장/불러오기 & 표지(Cover) 헬퍼
 // ============================================================================
+function getDefaultLogoBox(isCover) {
+  if (isCover) {
+    // 표지: 요청하신 하단 초록색 영역에 기본 배치
+    return { x: 250, y: 1020, width: 580, height: 135 };
+  }
+  // 마지막 컷 하단: 요청하신 보라색 영역처럼 큼지막한 크기로 기본 배치
+  return { x: 250, y: 1055, width: 580, height: 118 };
+}
+
+function ensureCutLogoBox(cut) {
+  if (!cut) return null;
+  if (!cut.logoBox || typeof cut.logoBox.x !== 'number') {
+    cut.logoBox = getDefaultLogoBox(Boolean(cut.isCover));
+  }
+  return cut.logoBox;
+}
+
 function loadSavedOrgLogo() {
   const savedLogoDataUrl = localStorage.getItem('webtoon_org_logo_dataurl');
   if (savedLogoDataUrl) {
@@ -118,7 +136,7 @@ function handleOrgLogoUpload(e) {
         console.warn('로고 로컬 저장 용량 초과:', err);
       }
       renderAll();
-      alert('경상남도 감염병관리지원단 로고가 등록되었습니다!\n표지(1컷)와 마지막 컷 하단에 자동 표시됩니다.');
+      alert('경상남도 감염병관리지원단 로고가 등록되었습니다!\n캔버스에서 로고를 클릭해 위치와 크기를 자유롭게 조절할 수 있습니다.');
     };
     img.src = dataUrl;
   };
@@ -146,9 +164,11 @@ function createCoverCutObject(episodeTitle, firstBodyBg = 'bg_forest.png', first
     blurBg: true,
     darkMood: true,
     speedLines: false,
-    showBottomLogo: false,
+    showBottomLogo: true,
+    logoBox: getDefaultLogoBox(true),
+    coverBadgeMode: 'none', // 'none'(숨김 - 릴스/피드 겸용 깔끔) | 'reels'(영상용) | 'slide'(옆으로 넘겨서 확인하기)
     captionStyle: 'outline',
-    captionSize: 64,
+    captionSize: 68,
     headerText: formatEpisodeDisplayTitle(episodeTitle),
     footerText: firstHeader ? firstHeader.replace(/\n/g, ' ') : '알아두면 쓸모 있는 감염병 예방 인스타툰',
     items: []
@@ -165,15 +185,20 @@ function ensureCoverAndEndLogo(cuts, episodeTitle) {
   }
 
   result.forEach((c, idx) => {
-    if (!c.isCover) {
+    if (c.isCover) {
+      c.showBottomLogo = true;
+      if (!c.coverBadgeMode) c.coverBadgeMode = 'none';
+      ensureCutLogoBox(c);
+    } else {
       c.showBottomLogo = (idx === result.length - 1);
+      ensureCutLogoBox(c);
     }
   });
   return result;
 }
 
 // ============================================================================
-// 0-1. 실행 취소(Undo) / 다시 실행(Redo) & 오디오 옵션 툴바
+// 0-1. 실행 취소(Undo) / 다시 실행(Redo) & 오디오·표지 옵션 툴바
 // ============================================================================
 function saveHistorySnapshot() {
   if (isRestoringHistory) return;
@@ -314,6 +339,45 @@ function injectToolbarEnhancements() {
     });
     document.getElementById('chkEnablePopSfx').addEventListener('change', (e) => {
       appState.audioOptions.enablePopSfx = e.target.checked;
+    });
+  }
+
+  // 우측 패널에 표지 하단 안내 문구 모드 & 로고 기본위치 복원 버튼 주입
+  const bottomLogoBtn = document.getElementById('btnToggleBottomLogo');
+  if (bottomLogoBtn && !document.getElementById('coverBadgeControlWrap')) {
+    const wrap = document.createElement('div');
+    wrap.id = 'coverBadgeControlWrap';
+    wrap.style.cssText = 'margin-top:8px; display:flex; flex-direction:column; gap:6px;';
+    wrap.innerHTML = `
+      <button id="btnResetLogoBox" class="btn btn-outline-sm" style="width:100%;" title="이동하거나 크기를 바꾼 지원단 로고를 원래 추천 위치·크기로 되돌립니다">📐 로고 위치·크기 기본값 복원</button>
+      <div id="coverBadgeSelectGroup" class="form-group" style="margin-bottom:0; margin-top:4px;">
+        <label for="coverBadgeModeSelect" style="color:#93c5fd;">📕 표지 하단 안내 문구 (릴스/피드 선택)</label>
+        <select id="coverBadgeModeSelect">
+          <option value="none">🚫 표시 안 함 (릴스·피드 겸용 깔끔 추천)</option>
+          <option value="reels">🎬 릴스·영상용 (▶ 감염병 예방 가이드)</option>
+          <option value="slide">📱 슬라이드용 (▶ 옆으로 넘겨서 확인하기)</option>
+        </select>
+      </div>
+    `;
+    bottomLogoBtn.parentNode.appendChild(wrap);
+
+    document.getElementById('btnResetLogoBox').addEventListener('click', () => {
+      const cut = appState.cuts[appState.currentCutIndex];
+      if (!cut) return;
+      saveHistorySnapshot();
+      cut.logoBox = getDefaultLogoBox(Boolean(cut.isCover));
+      cut.showBottomLogo = true;
+      appState.selectedLayerIndex = -2;
+      renderAll();
+    });
+
+    document.getElementById('coverBadgeModeSelect').addEventListener('change', (e) => {
+      const cut = appState.cuts[appState.currentCutIndex];
+      if (cut && cut.isCover) {
+        saveHistorySnapshot();
+        cut.coverBadgeMode = e.target.value;
+        renderAll();
+      }
     });
   }
 }
@@ -505,6 +569,7 @@ function createEmpty10Cuts() {
     darkMood: false,
     speedLines: false,
     showBottomLogo: idx === 9,
+    logoBox: getDefaultLogoBox(false),
     captionStyle: 'outline',
     captionSize: 46,
     headerText: '',
@@ -650,6 +715,8 @@ function applyScriptToState(scriptObj, isInitial = false) {
       darkMood: Boolean(rawCut.darkMood),
       speedLines: Boolean(rawCut.speedLines),
       showBottomLogo: Boolean(rawCut.showBottomLogo),
+      logoBox: rawCut.logoBox || getDefaultLogoBox(Boolean(rawCut.isCover)),
+      coverBadgeMode: rawCut.coverBadgeMode || 'none',
       captionStyle: rawCut.captionStyle || 'outline',
       captionSize: Number(rawCut.captionSize) || 46,
       headerText: rawCut.headerText || '',
@@ -792,7 +859,7 @@ function handleLocalAssetUpload(e) {
 }
 
 // ============================================================================
-// 4. 캔버스 렌더링 (표지 레이아웃 + 하단 로고 워터마크 + 말풍선/자막)
+// 4. 캔버스 렌더링 (자유 이동·크기 조절 지원단 로고 + 표지 + 말풍선/자막)
 // ============================================================================
 function drawImageCover(c, img, pad = 0) {
   const targetW = CANVAS_W + pad * 2;
@@ -888,44 +955,63 @@ function drawBuiltinBackground(c, bgId, isCover = false) {
   c.fillRect(0, 0, CANVAS_W, CANVAS_H);
 }
 
-function drawCoverLayout(c, cut, alpha = 1.0, slideOffsetY = 0) {
+// 공용 지원단 로고 박스 렌더링 (cut.logoBox 좌표·크기를 그대로 사용하므로 드래그·리사이즈 완벽 연동)
+function drawOrgLogoBox(c, cut, alpha = 1.0, offsetY = 0) {
+  if (!cut.showBottomLogo || alpha <= 0) return;
+  const box = ensureCutLogoBox(cut);
+  const bx = box.x;
+  const by = box.y + offsetY;
+  const bw = box.width;
+  const bh = box.height;
+
+  c.save();
+  c.globalAlpha = alpha;
+
+  const radius = Math.min(28, Math.round(bh * 0.22));
+  c.fillStyle = 'rgba(255, 255, 255, 0.94)';
+  c.beginPath();
+  c.roundRect(bx, by, bw, bh, radius);
+  c.fill();
+
+  c.strokeStyle = 'rgba(15, 23, 42, 0.14)';
+  c.lineWidth = 2;
+  c.stroke();
+
+  if (orgLogoImage) {
+    const padX = Math.max(18, bw * 0.06);
+    const padY = Math.max(10, bh * 0.12);
+    const innerW = Math.max(20, bw - padX * 2);
+    const innerH = Math.max(20, bh - padY * 2);
+    const ratio = Math.min(innerW / orgLogoImage.width, innerH / orgLogoImage.height);
+    const drawW = orgLogoImage.width * ratio;
+    const drawH = orgLogoImage.height * ratio;
+    c.drawImage(orgLogoImage, bx + (bw - drawW) / 2, by + (bh - drawH) / 2, drawW, drawH);
+  } else {
+    const autoFontSize = Math.max(20, Math.min(44, Math.round(bh * 0.34)));
+    c.fillStyle = '#0f172a';
+    c.font = `900 ${autoFontSize}px "Noto Sans KR", sans-serif`;
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.fillText(`🏛️ ${ORG_NAME_DEFAULT}`, bx + bw / 2, by + bh / 2 + 1);
+  }
+
+  c.restore();
+}
+
+// 표지 전용 렌더링 (제목 중앙 배치 + 하단 초록 영역 로고 + 선택형 하단 안내 문구)
+function drawCoverLayout(c, cut, alpha = 1.0, slideOffsetY = 0, isVideoExport = false) {
   if (alpha <= 0) return;
   c.save();
   c.globalAlpha = alpha;
   c.translate(0, slideOffsetY);
 
-  const logoCenterY = 290;
-  if (orgLogoImage) {
-    const maxW = 460;
-    const maxH = 140;
-    const ratio = Math.min(maxW / orgLogoImage.width, maxH / orgLogoImage.height);
-    const drawW = orgLogoImage.width * ratio;
-    const drawH = orgLogoImage.height * ratio;
-
-    c.fillStyle = 'rgba(255, 255, 255, 0.92)';
-    c.beginPath();
-    c.roundRect(CANVAS_W / 2 - (drawW + 64) / 2, logoCenterY - (drawH + 36) / 2, drawW + 64, drawH + 36, 24);
-    c.fill();
-
-    c.drawImage(orgLogoImage, CANVAS_W / 2 - drawW / 2, logoCenterY - drawH / 2, drawW, drawH);
-  } else {
-    c.fillStyle = 'rgba(255, 255, 255, 0.92)';
-    c.beginPath();
-    c.roundRect(CANVAS_W / 2 - 280, logoCenterY - 40, 560, 80, 40);
-    c.fill();
-    c.fillStyle = '#0f172a';
-    c.font = '900 32px "Noto Sans KR", sans-serif';
-    c.textAlign = 'center';
-    c.textBaseline = 'middle';
-    c.fillText(`🏛️ ${ORG_NAME_DEFAULT}`, CANVAS_W / 2, logoCenterY + 2);
-  }
-
+  // 1. 중앙 메인 제목 (headerText) - 상단 로고가 내려간 만큼 시선이 자연스럽게 중앙에 오도록 배치
   const mainTitle = (cut.headerText || formatEpisodeDisplayTitle(appState.episodeTitle)).trim();
   const titleLines = mainTitle.split('\n');
   const titleFontSize = Math.max(54, Number(cut.captionSize) || 68);
   const lineHeight = titleFontSize * 1.32;
   const totalTitleH = titleLines.length * lineHeight;
-  let titleStartY = 630 - totalTitleH / 2 + lineHeight / 2;
+  let titleStartY = 530 - totalTitleH / 2 + lineHeight / 2;
 
   c.font = `900 ${titleFontSize}px "Noto Sans KR", sans-serif`;
   c.textAlign = 'center';
@@ -941,7 +1027,8 @@ function drawCoverLayout(c, cut, alpha = 1.0, slideOffsetY = 0) {
     c.fillText(line, CANVAS_W / 2, y);
   });
 
-  const dividerY = titleStartY + totalTitleH + 30;
+  // 2. 장식 구분선
+  const dividerY = titleStartY + totalTitleH + 34;
   c.strokeStyle = '#38bdf8';
   c.lineWidth = 6;
   c.beginPath();
@@ -949,6 +1036,7 @@ function drawCoverLayout(c, cut, alpha = 1.0, slideOffsetY = 0) {
   c.lineTo(CANVAS_W / 2 + 120, dividerY);
   c.stroke();
 
+  // 3. 하단 부제목 / 안내 문구 (footerText)
   const subTitle = (cut.footerText || '').trim();
   if (subTitle) {
     c.font = '700 36px "Noto Sans KR", sans-serif';
@@ -957,73 +1045,33 @@ function drawCoverLayout(c, cut, alpha = 1.0, slideOffsetY = 0) {
     c.textBaseline = 'top';
     const subLines = subTitle.split('\n');
     subLines.forEach((line, idx) => {
-      c.fillText(line, CANVAS_W / 2, dividerY + 45 + idx * 48);
+      c.fillText(line, CANVAS_W / 2, dividerY + 46 + idx * 48);
     });
   }
 
-  c.fillStyle = 'rgba(255, 255, 255, 0.16)';
-  c.beginPath();
-  c.roundRect(CANVAS_W / 2 - 190, CANVAS_H - 165, 380, 56, 28);
-  c.fill();
-  c.fillStyle = '#ffffff';
-  c.font = '700 24px "Noto Sans KR", sans-serif';
-  c.textAlign = 'center';
-  c.textBaseline = 'middle';
-  c.fillText('▶ 옆으로 넘겨서 확인하기', CANVAS_W / 2, CANVAS_H - 137);
+  // 4. 최하단 안내 배지 (영상 저장 시 '옆으로 넘겨서 확인하기'는 자동으로 숨김/릴스 문구로 대체)
+  let badgeMode = cut.coverBadgeMode || 'none';
+  if (isVideoExport && badgeMode === 'slide') {
+    badgeMode = 'none';
+  }
 
-  c.restore();
-}
-
-function drawBottomOrgLogo(c, cut, alpha = 1.0) {
-  if (!cut.showBottomLogo || alpha <= 0) return;
-  const hasFooter = Boolean((cut.footerText || '').trim());
-  const footerLines = hasFooter ? cut.footerText.trim().split('\n').length : 0;
-  const footerOffset = hasFooter ? footerLines * ((cut.captionSize || 46) * 1.28) + 28 : 0;
-  const bottomY = CANVAS_H - 42 - footerOffset;
-
-  c.save();
-  c.globalAlpha = alpha;
-
-  if (orgLogoImage) {
-    const maxW = 340;
-    const maxH = 84;
-    const ratio = Math.min(maxW / orgLogoImage.width, maxH / orgLogoImage.height);
-    const drawW = orgLogoImage.width * ratio;
-    const drawH = orgLogoImage.height * ratio;
-
-    const boxW = drawW + 44;
-    const boxH = drawH + 22;
-    const boxX = CANVAS_W / 2 - boxW / 2;
-    const boxY = bottomY - boxH;
-
-    c.fillStyle = 'rgba(255, 255, 255, 0.90)';
+  if (badgeMode === 'slide' || badgeMode === 'reels') {
+    const badgeLabel = badgeMode === 'reels' ? '▶ 감염병 예방 숏폼 가이드' : '▶ 옆으로 넘겨서 확인하기';
+    c.fillStyle = 'rgba(255, 255, 255, 0.16)';
     c.beginPath();
-    c.roundRect(boxX, boxY, boxW, boxH, 18);
+    c.roundRect(CANVAS_W / 2 - 190, CANVAS_H - 135, 380, 52, 26);
     c.fill();
-
-    c.drawImage(orgLogoImage, CANVAS_W / 2 - drawW / 2, boxY + 11, drawW, drawH);
-  } else {
-    const boxW = 460;
-    const boxH = 56;
-    const boxX = CANVAS_W / 2 - boxW / 2;
-    const boxY = bottomY - boxH;
-
-    c.fillStyle = 'rgba(15, 23, 42, 0.78)';
-    c.beginPath();
-    c.roundRect(boxX, boxY, boxW, boxH, 28);
-    c.fill();
-    c.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-    c.lineWidth = 2;
-    c.stroke();
-
     c.fillStyle = '#ffffff';
-    c.font = '700 25px "Noto Sans KR", sans-serif';
+    c.font = '700 23px "Noto Sans KR", sans-serif';
     c.textAlign = 'center';
     c.textBaseline = 'middle';
-    c.fillText(`🏛️ ${ORG_NAME_DEFAULT}`, CANVAS_W / 2, boxY + boxH / 2 + 1);
+    c.fillText(badgeLabel, CANVAS_W / 2, CANVAS_H - 109);
   }
 
   c.restore();
+
+  // 5. 표지 지원단 로고 박스 (기본 위치: 초록색 영역 y=1020, 사용자가 드래그·리사이즈 가능)
+  drawOrgLogoBox(c, cut, alpha, slideOffsetY);
 }
 
 function drawSpeedLines(c) {
@@ -1047,7 +1095,6 @@ function drawSpeedLines(c) {
   c.restore();
 }
 
-// 자막 슬라이드 업 오프셋(slideOffsetY) 지원
 function drawStoryCaptions(c, cut, cutNumber, totalCuts, alpha = 1.0, slideOffsetY = 0) {
   if (alpha <= 0 || cut.isCover) return;
   const style = cut.captionStyle || 'outline';
@@ -1157,7 +1204,6 @@ function drawBubbleLayer(c, item, animState = null) {
     bgColor = '#ffffff'
   } = item;
 
-  // 미세 부유(Floating) 오프셋 반영 (꼬리 끝점은 화자를 계속 가리키도록 본체만 살짝 부유)
   const floatY = animState?.floatY || 0;
   const y = item.y + floatY;
 
@@ -1331,7 +1377,7 @@ function renderCutToContext(targetCtx, cutIndex, showSelection = false) {
   drawBackgroundAndMood(targetCtx, cut, 1.0);
 
   if (cut.isCover) {
-    drawCoverLayout(targetCtx, cut, 1.0, 0);
+    drawCoverLayout(targetCtx, cut, 1.0, 0, false);
   } else {
     (cut.items || []).forEach((item, idx) => {
       const t = (item.type || '').toLowerCase();
@@ -1344,7 +1390,12 @@ function renderCutToContext(targetCtx, cutIndex, showSelection = false) {
     });
 
     drawStoryCaptions(targetCtx, cut, cutIndex + 1, appState.cuts.length, 1.0, 0);
-    drawBottomOrgLogo(targetCtx, cut, 1.0);
+    drawOrgLogoBox(targetCtx, cut, 1.0, 0);
+  }
+
+  // 지원단 로고가 선택된 상태(-2)이면 크기 조절 및 이동 핸들 표시
+  if (showSelection && appState.selectedLayerIndex === -2 && cut.showBottomLogo) {
+    drawSelectionBox(targetCtx, ensureCutLogoBox(cut));
   }
 }
 
@@ -1404,13 +1455,13 @@ function renderAnimatedCutFrame(
   spec,
   onItemAppearCallback = null,
   triggeredSet = null,
-  prevSnapshotCanvas = null
+  prevSnapshotCanvas = null,
+  isVideoExport = true
 ) {
   const cut = appState.cuts[cutIndex];
   if (!cut) return;
   targetCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
 
-  // [효과 3] 위기·강조 컷 미세 카메라 흔들림 (첫 말풍선 등장 순간 0.22초간 작동)
   let shakeX = 0;
   let shakeY = 0;
   if (spec.tense && elapsedSec >= spec.introDelay && elapsedSec <= spec.introDelay + 0.22) {
@@ -1425,19 +1476,17 @@ function renderAnimatedCutFrame(
     targetCtx.translate(shakeX, shakeY);
   }
 
-  // 배경 부드러운 줌인 (Ken Burns)
   const progress = Math.min(1, Math.max(0, elapsedSec / spec.totalDuration));
   const zoomScale = 1.0 + progress * 0.035;
   drawBackgroundAndMood(targetCtx, cut, zoomScale);
 
-  // [효과 4] 자막 아래에서 위로 스르륵(Slide-up Fade) 등장
   const captionT = Math.min(1, elapsedSec / 0.32);
   const captionEase = easeOutCubic(captionT);
   const captionAlpha = captionEase;
   const captionSlideY = (1 - captionEase) * 16;
 
   if (cut.isCover) {
-    drawCoverLayout(targetCtx, cut, captionAlpha, captionSlideY);
+    drawCoverLayout(targetCtx, cut, captionAlpha, captionSlideY, isVideoExport);
   } else {
     (cut.items || []).forEach((item, idx) => {
       const seqOrder = spec.orderMap[idx] ?? idx;
@@ -1459,7 +1508,6 @@ function renderAnimatedCutFrame(
         alpha = Math.min(1, localT * 1.8);
         scale = 0.65 + 0.35 * easeOutBack(localT);
       } else {
-        // [효과 2] 말풍선 등장 후 살아 숨 쉬는 미세 부유(Floating ±4px)
         const postAppearSec = elapsedSec - (appearTime + spec.popDuration);
         floatY = Math.sin(postAppearSec * 2.6 + idx) * 4.0;
       }
@@ -1470,12 +1518,11 @@ function renderAnimatedCutFrame(
     });
 
     drawStoryCaptions(targetCtx, cut, cutIndex + 1, appState.cuts.length, captionAlpha, captionSlideY);
-    drawBottomOrgLogo(targetCtx, cut, captionAlpha);
+    drawOrgLogoBox(targetCtx, cut, captionAlpha, 0);
   }
 
   targetCtx.restore();
 
-  // [효과 1] 이전 컷에서 현재 컷으로 넘어갈 때 0.28초간 부드러운 크로스페이드 + 미세 슬라이드 전환
   const transitionDur = 0.28;
   if (prevSnapshotCanvas && elapsedSec < transitionDur) {
     const trProgress = easeOutCubic(elapsedSec / transitionDur);
@@ -1508,7 +1555,6 @@ function previewCurrentCutAnimation() {
   const startTime = performance.now();
   const triggeredSet = new Set();
 
-  // 이전 컷이 존재하면 미리보기에서도 크로스페이드 전환 효과 시연
   let prevSnapshot = null;
   if (cutIndex > 0) {
     prevSnapshot = document.createElement('canvas');
@@ -1531,7 +1577,7 @@ function previewCurrentCutAnimation() {
         if (appState.audioOptions.enablePopSfx && (item.type || '').toLowerCase() === 'bubble') {
           audioEngine.playBubblePopSound(item.bubbleStyle);
         }
-      }, triggeredSet, prevSnapshot);
+      }, triggeredSet, prevSnapshot, true);
       previewAnimId = requestAnimationFrame(step);
     } else {
       stopAllPreviewMedia();
@@ -1619,7 +1665,7 @@ function renderThumbnailsAndGrid() {
     card.innerHTML = `
       <div class="cut-thumb-header">
         <span>${titleLabel}</span>
-        ${cut.showBottomLogo ? '<span title="하단 지원단 로고 표시됨">🏛️</span>' : ''}
+        ${cut.showBottomLogo ? '<span title="지원단 로고 표시됨">🏛️</span>' : ''}
       </div>
       <img src="${dataUrl}" class="cut-thumb-preview" alt="${titleLabel}">
     `;
@@ -1685,14 +1731,31 @@ function hitTestHandle(pos, item) {
   return null;
 }
 
+// 캔버스 마우스 이벤트: 말풍선/스티커뿐만 아니라 지원단 로고(-2)도 자유롭게 드래그 & 리사이즈 지원
 function bindCanvasMouseEvents() {
   mainCanvas.addEventListener('mousedown', (e) => {
     stopAllPreviewMedia();
     const pos = getCanvasMousePos(e);
     const cut = appState.cuts[appState.currentCutIndex];
-    if (!cut || cut.isCover) return;
+    if (!cut) return;
 
-    if (appState.selectedLayerIndex >= 0 && cut.items[appState.selectedLayerIndex]) {
+    // 1. 현재 선택된 객체가 로고(-2)이거나 일반 아이템(>=0)이면 리사이즈 핸들 먼저 체크
+    if (appState.selectedLayerIndex === -2 && cut.showBottomLogo) {
+      const logoBox = ensureCutLogoBox(cut);
+      const handleMode = hitTestHandle(pos, logoBox);
+      if (handleMode) {
+        saveHistorySnapshot();
+        dragState = {
+          isDragging: true,
+          mode: handleMode,
+          targetType: 'logo',
+          startX: pos.x,
+          startY: pos.y,
+          initialBox: { x: logoBox.x, y: logoBox.y, width: logoBox.width, height: logoBox.height }
+        };
+        return;
+      }
+    } else if (!cut.isCover && appState.selectedLayerIndex >= 0 && cut.items[appState.selectedLayerIndex]) {
       const selItem = cut.items[appState.selectedLayerIndex];
       const handleMode = hitTestHandle(pos, selItem);
       if (handleMode) {
@@ -1700,6 +1763,7 @@ function bindCanvasMouseEvents() {
         dragState = {
           isDragging: true,
           mode: handleMode,
+          targetType: 'item',
           startX: pos.x,
           startY: pos.y,
           initialBox: {
@@ -1715,79 +1779,112 @@ function bindCanvasMouseEvents() {
       }
     }
 
-    let foundIdx = -1;
-    for (let i = cut.items.length - 1; i >= 0; i--) {
-      const it = cut.items[i];
-      if (pos.x >= it.x && pos.x <= it.x + it.width && pos.y >= it.y && pos.y <= it.y + it.height) {
-        foundIdx = i;
-        break;
+    // 2. 본문 아이템 클릭 히트 테스트
+    if (!cut.isCover) {
+      let foundIdx = -1;
+      for (let i = cut.items.length - 1; i >= 0; i--) {
+        const it = cut.items[i];
+        if (pos.x >= it.x && pos.x <= it.x + it.width && pos.y >= it.y && pos.y <= it.y + it.height) {
+          foundIdx = i;
+          break;
+        }
+      }
+      if (foundIdx >= 0) {
+        appState.selectedLayerIndex = foundIdx;
+        saveHistorySnapshot();
+        const selItem = cut.items[foundIdx];
+        dragState = {
+          isDragging: true,
+          mode: 'move',
+          targetType: 'item',
+          startX: pos.x,
+          startY: pos.y,
+          initialBox: {
+            x: selItem.x,
+            y: selItem.y,
+            width: selItem.width,
+            height: selItem.height,
+            tailX: selItem.tailX,
+            tailY: selItem.tailY
+          }
+        };
+        renderAll();
+        return;
       }
     }
-    appState.selectedLayerIndex = foundIdx;
-    if (foundIdx >= 0) {
-      saveHistorySnapshot();
-      const selItem = cut.items[foundIdx];
-      dragState = {
-        isDragging: true,
-        mode: 'move',
-        startX: pos.x,
-        startY: pos.y,
-        initialBox: {
-          x: selItem.x,
-          y: selItem.y,
-          width: selItem.width,
-          height: selItem.height,
-          tailX: selItem.tailX,
-          tailY: selItem.tailY
-        }
-      };
+
+    // 3. 지원단 로고 박스 클릭 히트 테스트 (표지 및 로고 표시된 컷 모두 가능)
+    if (cut.showBottomLogo) {
+      const logoBox = ensureCutLogoBox(cut);
+      if (pos.x >= logoBox.x && pos.x <= logoBox.x + logoBox.width && pos.y >= logoBox.y && pos.y <= logoBox.y + logoBox.height) {
+        appState.selectedLayerIndex = -2;
+        saveHistorySnapshot();
+        dragState = {
+          isDragging: true,
+          mode: 'move',
+          targetType: 'logo',
+          startX: pos.x,
+          startY: pos.y,
+          initialBox: { x: logoBox.x, y: logoBox.y, width: logoBox.width, height: logoBox.height }
+        };
+        renderAll();
+        return;
+      }
     }
+
+    appState.selectedLayerIndex = -1;
     renderAll();
   });
 
   window.addEventListener('mousemove', (e) => {
     if (!dragState.isDragging) return;
     const cut = appState.cuts[appState.currentCutIndex];
-    const item = cut?.items[appState.selectedLayerIndex];
-    if (!item) return;
+    if (!cut) return;
+
+    const targetBox = dragState.targetType === 'logo'
+      ? ensureCutLogoBox(cut)
+      : cut.items?.[appState.selectedLayerIndex];
+    if (!targetBox) return;
 
     const pos = getCanvasMousePos(e);
     const dx = pos.x - dragState.startX;
     const dy = pos.y - dragState.startY;
     const b = dragState.initialBox;
+    const minW = dragState.targetType === 'logo' ? 180 : 80;
+    const minH = dragState.targetType === 'logo' ? 48 : 80;
 
-    if (dragState.mode === 'tail') {
-      item.tailX = Math.round(pos.x);
-      item.tailY = Math.round(pos.y);
-      item.tailDir = 'custom';
+    if (dragState.mode === 'tail' && dragState.targetType === 'item') {
+      targetBox.tailX = Math.round(pos.x);
+      targetBox.tailY = Math.round(pos.y);
+      targetBox.tailDir = 'custom';
       document.getElementById('bubbleTailSelect').value = 'custom';
     } else if (dragState.mode === 'move') {
-      item.x = Math.round(b.x + dx);
-      item.y = Math.round(b.y + dy);
-      if (typeof b.tailX === 'number') {
-        item.tailX = Math.round(b.tailX + dx);
-        item.tailY = Math.round(b.tailY + dy);
+      targetBox.x = Math.round(b.x + dx);
+      targetBox.y = Math.round(b.y + dy);
+      if (dragState.targetType === 'item' && typeof b.tailX === 'number') {
+        targetBox.tailX = Math.round(b.tailX + dx);
+        targetBox.tailY = Math.round(b.tailY + dy);
       }
     } else if (dragState.mode === 'resize-se') {
-      item.width = Math.max(80, Math.round(b.width + dx));
-      item.height = Math.max(80, Math.round(b.height + dy));
+      targetBox.width = Math.max(minW, Math.round(b.width + dx));
+      targetBox.height = Math.max(minH, Math.round(b.height + dy));
     } else if (dragState.mode === 'resize-sw') {
-      const newW = Math.max(80, Math.round(b.width - dx));
-      item.x = Math.round(b.x + (b.width - newW));
-      item.width = newW;
-      item.height = Math.max(80, Math.round(b.height + dy));
+      const newW = Math.max(minW, Math.round(b.width - dx));
+      targetBox.x = Math.round(b.x + (b.width - newW));
+      targetBox.width = newW;
+      targetBox.height = Math.max(minH, Math.round(b.height + dy));
     } else if (dragState.mode === 'resize-ne') {
-      const newH = Math.max(80, Math.round(b.height - dy));
-      item.y = Math.round(b.y + (b.height - newH));
-      item.width = Math.max(80, Math.round(b.width + dx));
-      item.height = newH;
+      const newH = Math.max(minH, Math.round(b.height - dy));
+      targetBox.y = Math.round(b.y + (b.height - newH));
+      targetBox.width = Math.max(minW, Math.round(b.width + dx));
+      targetBox.height = newH;
     } else if (dragState.mode === 'resize-nw') {
-      const newW = Math.max(80, Math.round(b.width - dx));
-      const newH = Math.max(80, Math.round(b.height - dy));
-      item.x = Math.round(b.x + (b.width - newW));
-      item.y = Math.round(b.y + (b.height - newH));
-      item.width = newW;
-      item.height = newH;
+      const newW = Math.max(minW, Math.round(b.width - dx));
+      const newH = Math.max(minH, Math.round(b.height - dy));
+      targetBox.x = Math.round(b.x + (b.width - newW));
+      targetBox.y = Math.round(b.y + (b.height - newH));
+      targetBox.width = newW;
+      targetBox.height = newH;
     }
 
     renderCutToContext(ctx, appState.currentCutIndex, true);
@@ -1815,6 +1912,13 @@ function syncInspectorWithSelection() {
   if (headerLabel) headerLabel.textContent = cut.isCover ? '📕 표지 대제목 (중앙 배치)' : '상단 사연 자막 (흰 글씨 + 검은 외곽선)';
   if (footerLabel) footerLabel.textContent = cut.isCover ? '📕 표지 부제목 (중앙 하단 배치)' : '하단 사연 자막 (흰 글씨 + 검은 외곽선)';
 
+  const coverBadgeGroup = document.getElementById('coverBadgeSelectGroup');
+  const coverBadgeSelect = document.getElementById('coverBadgeModeSelect');
+  if (coverBadgeGroup && coverBadgeSelect) {
+    coverBadgeGroup.classList.toggle('hidden', !cut.isCover);
+    coverBadgeSelect.value = cut.coverBadgeMode || 'none';
+  }
+
   document.getElementById('btnToggleBlur').style.borderColor = cut.blurBg ? '#3b82f6' : '';
   document.getElementById('btnToggleDark').style.borderColor = cut.darkMood ? '#3b82f6' : '';
   document.getElementById('btnToggleSpeed').style.borderColor = cut.speedLines ? '#3b82f6' : '';
@@ -1823,7 +1927,6 @@ function syncInspectorWithSelection() {
     bottomLogoBtn.style.backgroundColor = cut.showBottomLogo ? 'rgba(56, 189, 248, 0.25)' : '';
   }
 
-  const item = cut.items[appState.selectedLayerIndex];
   const noSelMsg = document.getElementById('noSelectionMsg');
   const commonCtrl = document.getElementById('commonLayerControls');
   const bubbleInsp = document.getElementById('bubbleInspector');
@@ -1833,12 +1936,23 @@ function syncInspectorWithSelection() {
   bubbleInsp.classList.add('hidden');
   stickerInsp.classList.add('hidden');
 
+  if (appState.selectedLayerIndex === -2 && cut.showBottomLogo) {
+    noSelMsg.classList.remove('hidden');
+    noSelMsg.innerHTML = '🏛️ <strong>지원단 로고</strong>가 선택되었습니다.<br>캔버스에서 로고를 드래그해 위치를 옮기거나 모서리 핸들로 크기를 조절하세요!';
+    commonCtrl.classList.add('hidden');
+    badge.textContent = '🏛️ 지원단 로고 조절 중';
+    return;
+  }
+
+  const item = cut.items[appState.selectedLayerIndex];
   if (!item) {
     noSelMsg.classList.remove('hidden');
+    noSelMsg.innerHTML = '캔버스에서 <strong>말풍선</strong>이나 <strong>지원단 로고</strong>를 클릭하면 위치 이동과 크기 조절이 가능합니다.';
     commonCtrl.classList.add('hidden');
     badge.textContent = cut.isCover ? '📕 표지 페이지' : '선택 없음';
     return;
   }
+
   noSelMsg.classList.add('hidden');
   commonCtrl.classList.remove('hidden');
 
@@ -1894,9 +2008,15 @@ function bindUIEvents() {
 
   document.getElementById('btnToggleBottomLogo').addEventListener('click', () => {
     const cut = appState.cuts[appState.currentCutIndex];
-    if (cut && !cut.isCover) {
+    if (cut) {
       saveHistorySnapshot();
       cut.showBottomLogo = !cut.showBottomLogo;
+      if (cut.showBottomLogo) {
+        ensureCutLogoBox(cut);
+        appState.selectedLayerIndex = -2;
+      } else if (appState.selectedLayerIndex === -2) {
+        appState.selectedLayerIndex = -1;
+      }
       renderAll();
     }
   });
@@ -1955,6 +2075,7 @@ function bindUIEvents() {
       darkMood: false,
       speedLines: false,
       showBottomLogo: true,
+      logoBox: getDefaultLogoBox(false),
       captionStyle: 'outline',
       captionSize: 46,
       headerText: '새 자막을 입력하세요',
@@ -2251,7 +2372,8 @@ function bindUIEvents() {
 
 function getSelectedItem() {
   const cut = appState.cuts[appState.currentCutIndex];
-  return cut ? cut.items[appState.selectedLayerIndex] : null;
+  if (!cut || appState.selectedLayerIndex < 0) return null;
+  return cut.items[appState.selectedLayerIndex] || null;
 }
 
 function getSanitizedEpisodeName() {
@@ -2382,7 +2504,7 @@ async function downloadReelsMp4() {
               await new Promise(r => setTimeout(r, 0));
             }
             const elapsedSec = f / fps;
-            renderAnimatedCutFrame(exportCtx, i, elapsedSec, spec, null, null, i > 0 ? prevSnapshot : null);
+            renderAnimatedCutFrame(exportCtx, i, elapsedSec, spec, null, null, i > 0 ? prevSnapshot : null, true);
 
             const timestampUs = Math.round((globalFrameIndex / fps) * 1_000_000);
             const durationUs = Math.round((1 / fps) * 1_000_000);
@@ -2392,7 +2514,6 @@ async function downloadReelsMp4() {
             globalFrameIndex++;
           }
 
-          // 현재 컷의 마지막 프레임을 다음 컷 크로스페이드 전환용 스냅샷으로 저장
           prevSnapshot.getContext('2d').drawImage(exportCanvas, 0, 0);
         }
 
@@ -2479,7 +2600,8 @@ async function recordVideoWithAudio(exportCanvas, exportCtx, fps, epName, loadin
             }
           },
           triggeredSet,
-          i > 0 ? prevSnapshot : null
+          i > 0 ? prevSnapshot : null,
+          true
         );
 
         await new Promise(r => requestAnimationFrame(r));
