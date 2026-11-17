@@ -2,7 +2,7 @@
  * 인스타그램 웹툰 & 릴스 자동 제작기
  * - 자동 표지(1컷) + 본문(2~11컷) 총 11장 구성
  * - 표지 불투명 오버레이 & 경상남도 감염병관리지원단 로고(표지 + 마지막 컷 하단) 자동 배치
- * - 저작권 프리 BGM & 토끼/호랑이 대화 보이스 MP4 인코딩 + 실행취소(Undo) 포함
+ * - 시나리오 분위기 자동 감지 BGM + 말풍선 팝업 '뿅!' 효과음 MP4 인코딩 + 실행취소(Undo) 포함
  */
 
 const CANVAS_W = 1080;
@@ -53,7 +53,7 @@ const WORLD_PRESETS = {
 };
 
 let loadedImages = {};
-let orgLogoImage = null; // 경상남도 감염병관리지원단 로고 이미지 객체
+let orgLogoImage = null;
 
 let appState = {
   episodeTitle: '진드기_1탄_옷차림편',
@@ -64,7 +64,7 @@ let appState = {
   cuts: [],
   audioOptions: {
     enableBgm: true,
-    enableVoice: true
+    enablePopSfx: true
   }
 };
 
@@ -127,7 +127,6 @@ function handleOrgLogoUpload(e) {
 
 function formatEpisodeDisplayTitle(rawTitle) {
   const cleaned = String(rawTitle || '감염병 예방 웹툰').replace(/_/g, ' ').trim();
-  // 제목이 길면 자연스럽게 2줄로 분할
   if (cleaned.length > 14 && !cleaned.includes('\n')) {
     const mid = Math.floor(cleaned.length / 2);
     const spaceIdx = cleaned.indexOf(' ', mid - 3);
@@ -160,12 +159,10 @@ function ensureCoverAndEndLogo(cuts, episodeTitle) {
   const firstBg = result[0]?.background || 'bg_empty.png';
   const firstHeader = result[0]?.headerText || '';
 
-  // 맨 앞에 표지가 없으면 자동 삽입 (총 10컷 -> 11컷)
   if (result.length === 0 || !result[0].isCover) {
     result.unshift(createCoverCutObject(episodeTitle, firstBg, firstHeader));
   }
 
-  // 마지막 컷(11번째 컷)에는 하단 지원단 로고 자동 활성화
   result.forEach((c, idx) => {
     if (!c.isCover) {
       c.showBottomLogo = (idx === result.length - 1);
@@ -300,11 +297,11 @@ function injectToolbarEnhancements() {
     box.id = 'audioOptionBox';
     box.style.cssText = 'display:flex; align-items:center; gap:6px; background:rgba(15,23,42,0.7); border:1px solid #334155; padding:4px 8px; border-radius:6px; font-size:11px; color:#e2e8f0;';
     box.innerHTML = `
-      <label style="display:flex; align-items:center; gap:3px; cursor:pointer;" title="저작권 걱정 없는 잔잔한 자체 작곡 BGM 포함">
-        <input type="checkbox" id="chkEnableBgm" checked> 🎵BGM
+      <label style="display:flex; align-items:center; gap:3px; cursor:pointer;" title="시나리오 분위기와 컷 전개에 맞춰 자동 작곡되는 저작권 프리 BGM">
+        <input type="checkbox" id="chkEnableBgm" checked> 🎵맞춤BGM
       </label>
-      <label style="display:flex; align-items:center; gap:3px; cursor:pointer;" title="토끼(높은 톤)·호랑이(낮은 톤) 말풍선 대화 보이스 포함">
-        <input type="checkbox" id="chkEnableVoice" checked> 🗣️목소리
+      <label style="display:flex; align-items:center; gap:3px; cursor:pointer;" title="말풍선이 뜰 때마다 작고 경쾌한 '뿅!' 효과음 삽입">
+        <input type="checkbox" id="chkEnablePopSfx" checked> 💬팝업음
       </label>
     `;
     const mp4Btn = document.getElementById('btnDownloadMp4');
@@ -314,66 +311,33 @@ function injectToolbarEnhancements() {
     document.getElementById('chkEnableBgm').addEventListener('change', (e) => {
       appState.audioOptions.enableBgm = e.target.checked;
     });
-    document.getElementById('chkEnableVoice').addEventListener('change', (e) => {
-      appState.audioOptions.enableVoice = e.target.checked;
+    document.getElementById('chkEnablePopSfx').addEventListener('change', (e) => {
+      appState.audioOptions.enablePopSfx = e.target.checked;
     });
   }
 }
 
 // ============================================================================
-// 0-2. 화자 자동 판별 및 Web Audio BGM·보이스 엔진
+// 0-2. 시나리오 분위기 자동 분석 및 컷 전개 맞춤형 Web Audio 엔진
 // ============================================================================
-function detectBubbleSpeakerRole(bubble, cut) {
-  const speaker = (bubble.speaker || '').trim();
-  const text = (bubble.text || '').trim();
-  const scene = (cut?.scenePrompt || '') + ' ' + (cut?.headerText || '');
+function analyzeScenarioMood(cuts, episodeTitle) {
+  const fullText = [
+    episodeTitle || '',
+    ...cuts.map(c => `${c.headerText || ''} ${c.footerText || ''} ${(c.items || []).map(i => i.text || '').join(' ')}`)
+  ].join(' ');
 
-  if (speaker.includes('호랑이') || speaker.includes('박사') || speaker.includes('연구원') || speaker.includes('부엉이') || speaker.includes('티라노') || speaker.includes('수달') || speaker.includes('사마귀')) {
-    return 'doctor';
+  // 키워드 기반 전체 에피소드 톤 자동 판별
+  if (/테러|경보|응급|치명|중증|비상|위험|사망|확산/.test(fullText)) {
+    return 'alert'; // 차분하고 진중한 긴장 톤
   }
-  if (speaker.includes('토끼') || speaker.includes('시민') || speaker.includes('나비') || speaker.includes('아기')) {
-    return 'citizen';
+  if (/손씻기|비누|청결|기침|마스크|예방|방역|체크|완벽/.test(fullText)) {
+    return 'bright'; // 맑고 경쾌한 피아노 톤
   }
-
-  const doctorKeywords = ['위험해요', '막아야', '보이죠', '줄일 수 있답니다', '알려드릴게요', '예방', '비말', '침투', '식별', '수칙', '잠깐!'];
-  if (doctorKeywords.some(kw => text.includes(kw))) return 'doctor';
-
-  const citizenKeywords = ['다녀와야지', '최고야', '풀잎인가', '안 보여', '정답이었네요', '보이네', '으악', '우와', '아하', '앗,'];
-  if (citizenKeywords.some(kw => text.includes(kw))) return 'citizen';
-
-  if (typeof bubble.tailX === 'number' && bubble.tailX > CANVAS_W * 0.58) return 'doctor';
-  if (scene.includes('박사') && !scene.includes('토끼') && !scene.includes('시민')) return 'doctor';
-  return 'citizen';
-}
-
-function speakBubbleTextTTS(text, role) {
-  if (!('speechSynthesis' in window)) return;
-  try {
-    window.speechSynthesis.cancel();
-    const cleanText = String(text).replace(/\n/g, ' ').replace(/[~!]+/g, ' ').trim();
-    if (!cleanText) return;
-
-    const utter = new SpeechSynthesisUtterance(cleanText);
-    utter.lang = 'ko-KR';
-    const voices = window.speechSynthesis.getVoices().filter(v => v.lang.includes('ko'));
-
-    if (role === 'doctor') {
-      utter.pitch = 0.82;
-      utter.rate = 1.05;
-      if (voices.length > 1) utter.voice = voices[voices.length - 1];
-    } else {
-      utter.pitch = 1.32;
-      utter.rate = 1.12;
-      if (voices.length > 0) utter.voice = voices[0];
-    }
-    window.speechSynthesis.speak(utter);
-  } catch (e) {
-    console.warn('TTS 재생 실패:', e);
-  }
+  return 'warm'; // 따뜻하고 포근한 일상·산책 오르골 톤
 }
 
 class WebtoonAudioEngine {
-  constructor() {
+  constructor(cuts = [], episodeTitle = '') {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     this.ctx = new AudioContextClass();
     this.dest = this.ctx.createMediaStreamDestination();
@@ -381,109 +345,157 @@ class WebtoonAudioEngine {
     this.masterGain.gain.value = 0.85;
     this.masterGain.connect(this.dest);
     this.masterGain.connect(this.ctx.destination);
+
     this.isStopped = false;
     this.bgmTimer = null;
+    this.baseTheme = analyzeScenarioMood(cuts, episodeTitle);
+    this.currentCutMood = 'normal'; // 'normal' | 'tense' | 'resolve'
   }
 
   getAudioStream() {
     return this.dest.stream;
   }
 
-  startGentleBgm() {
+  // 현재 재생 중인 컷의 시각 효과(darkMood, speedLines) 및 대사 키워드를 읽어 실시간 분위기 전환
+  updateCutMood(cut, cutIndex, totalCuts) {
+    if (!cut) return;
+    if (cut.isCover) {
+      this.currentCutMood = 'normal';
+      return;
+    }
+    const cutText = `${cut.headerText || ''} ${(cut.items || []).map(i => i.text || '').join(' ')}`;
+    if (cut.darkMood || cut.speedLines || /으악|위험|불청객|안 보여|스톱|잠깐|침투|비말/.test(cutText)) {
+      this.currentCutMood = 'tense';
+    } else if (cutIndex >= Math.floor(totalCuts * 0.6)) {
+      this.currentCutMood = 'resolve'; // 후반부 해결·실천 구간
+    } else {
+      this.currentCutMood = 'normal';
+    }
+  }
+
+  startScenarioBgm() {
     if (this.isStopped) return;
-    const chords = [
-      [261.63, 329.63, 392.00, 493.88],
-      [220.00, 261.63, 329.63, 392.00],
-      [174.61, 220.00, 261.63, 329.63],
-      [196.00, 246.94, 293.66, 329.63]
-    ];
+
+    // 테마별 코드 진행 (Hz)
+    const chordPalettes = {
+      warm: [
+        [261.63, 329.63, 392.00, 493.88], // Cmaj7
+        [220.00, 261.63, 329.63, 392.00], // Am7
+        [174.61, 220.00, 261.63, 329.63], // Fmaj7
+        [196.00, 246.94, 293.66, 392.00]  // G6
+      ],
+      bright: [
+        [293.66, 369.99, 440.00, 554.37], // Dmaj7 (밝고 상쾌함)
+        [246.94, 293.66, 369.99, 440.00], // Bm7
+        [196.00, 246.94, 293.66, 369.99], // Gmaj7
+        [220.00, 277.18, 329.63, 440.00]  // A6
+      ],
+      alert: [
+        [220.00, 261.63, 329.63, 392.00], // Am7 (차분한 경각심)
+        [174.61, 220.00, 261.63, 329.63], // Fmaj7
+        [164.81, 196.00, 246.94, 329.63], // Em7
+        [220.00, 261.63, 329.63, 440.00]  // Am
+      ],
+      tense: [
+        // 위기/실수 컷에서 실시간 전환되는 긴장감 코드 (Dm7 - E7sus4)
+        [293.66, 349.23, 440.00, 523.25], // Dm7
+        [246.94, 329.63, 392.00, 493.88], // Em7
+        [220.00, 261.63, 329.63, 415.30], // Am(maj7)
+        [164.81, 246.94, 329.63, 392.00]  // Em
+      ],
+      resolve: [
+        // 후반부 해결/실천 컷에서 전환되는 희망차고 밝은 코드
+        [261.63, 329.63, 392.00, 523.25], // C
+        [196.00, 246.94, 293.66, 392.00], // G
+        [220.00, 261.63, 329.63, 440.00], // Am
+        [174.61, 220.00, 261.63, 349.23]  // F
+      ]
+    };
+
     let step = 0;
 
     const playNote = () => {
       if (this.isStopped) return;
       const now = this.ctx.currentTime;
+
+      // 현재 컷 분위기가 위기(tense)나 해결(resolve)이면 우선 적용, 아니면 에피소드 기본 테마 적용
+      const activeKey = (this.currentCutMood === 'tense' || this.currentCutMood === 'resolve')
+        ? this.currentCutMood
+        : this.baseTheme;
+      const chords = chordPalettes[activeKey] || chordPalettes.warm;
+
       const chordIdx = Math.floor(step / 4) % chords.length;
       const noteIdx = step % 4;
       const freq = chords[chordIdx][noteIdx];
 
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
-      osc.type = 'sine';
+      osc.type = this.currentCutMood === 'tense' ? 'triangle' : 'sine';
       osc.frequency.setValueAtTime(freq, now);
 
       gain.gain.setValueAtTime(0.0001, now);
-      gain.gain.exponentialRampToValueAtTime(0.045, now + 0.06);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.1);
+      gain.gain.exponentialRampToValueAtTime(0.042, now + 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 1.05);
 
       osc.connect(gain);
       gain.connect(this.masterGain);
       osc.start(now);
-      osc.stop(now + 1.15);
+      osc.stop(now + 1.1);
 
+      // 마디 첫 박자 저음 베이스
       if (noteIdx === 0) {
         const bassOsc = this.ctx.createOscillator();
         const bassGain = this.ctx.createGain();
         bassOsc.type = 'triangle';
         bassOsc.frequency.setValueAtTime(freq * 0.5, now);
         bassGain.gain.setValueAtTime(0.0001, now);
-        bassGain.gain.exponentialRampToValueAtTime(0.035, now + 0.1);
-        bassGain.gain.exponentialRampToValueAtTime(0.0001, now + 1.6);
+        bassGain.gain.exponentialRampToValueAtTime(0.032, now + 0.08);
+        bassGain.gain.exponentialRampToValueAtTime(0.0001, now + 1.5);
         bassOsc.connect(bassGain);
         bassGain.connect(this.masterGain);
         bassOsc.start(now);
-        bassOsc.stop(now + 1.65);
+        bassOsc.stop(now + 1.55);
       }
 
       step++;
-      this.bgmTimer = setTimeout(playNote, 450);
+      const tempoMs = this.currentCutMood === 'tense' ? 380 : (this.baseTheme === 'bright' ? 410 : 460);
+      this.bgmTimer = setTimeout(playNote, tempoMs);
     };
 
     playNote();
   }
 
-  playCharacterDialogueVoice(text, role) {
+  // 말풍선 등장 시 작고 경쾌한 물방울 '뿅!' 효과음
+  playBubblePopSound(bubbleStyle = 'round') {
     if (this.isStopped) return;
-    const cleanText = String(text || '').replace(/\s+/g, '');
-    const syllableCount = Math.min(18, Math.max(4, Math.ceil(cleanText.length * 0.65)));
     const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
 
-    const baseFreq = role === 'doctor' ? 190 : 460;
-    const interval = role === 'doctor' ? 0.095 : 0.078;
-
-    for (let i = 0; i < syllableCount; i++) {
-      const t = now + i * interval;
-      const charCode = cleanText.charCodeAt(i % cleanText.length) || 65;
-      const pitchOffset = ((charCode % 7) - 3) * (role === 'doctor' ? 8 : 18);
-      const freq = Math.max(110, baseFreq + pitchOffset);
-
-      const osc = this.ctx.createOscillator();
-      const filter = this.ctx.createBiquadFilter();
-      const gain = this.ctx.createGain();
-
-      osc.type = role === 'doctor' ? 'sawtooth' : 'triangle';
-      osc.frequency.setValueAtTime(freq, t);
-      osc.frequency.exponentialRampToValueAtTime(freq * (role === 'doctor' ? 0.94 : 1.06), t + interval * 0.8);
-
-      filter.type = 'lowpass';
-      filter.frequency.setValueAtTime(role === 'doctor' ? 680 : 1650, t);
-
-      gain.gain.setValueAtTime(0.0001, t);
-      gain.gain.exponentialRampToValueAtTime(role === 'doctor' ? 0.085 : 0.075, t + 0.015);
-      gain.gain.exponentialRampToValueAtTime(0.0001, t + interval * 0.85);
-
-      osc.connect(filter);
-      filter.connect(gain);
-      gain.connect(this.masterGain);
-
-      osc.start(t);
-      osc.stop(t + interval * 0.9);
+    osc.type = 'sine';
+    if (bubbleStyle === 'sfx' || bubbleStyle === 'shout') {
+      // 강조/외침 말풍선일 때는 조금 더 경쾌한 2단 팝업음
+      osc.frequency.setValueAtTime(520, now);
+      osc.frequency.exponentialRampToValueAtTime(980, now + 0.09);
+    } else {
+      // 일반 대화 말풍선일 때는 부드러운 물방울 팝업음
+      osc.frequency.setValueAtTime(440, now);
+      osc.frequency.exponentialRampToValueAtTime(760, now + 0.08);
     }
+
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.065, now + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.11);
+
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.12);
   }
 
   stop() {
     this.isStopped = true;
     if (this.bgmTimer) clearTimeout(this.bgmTimer);
-    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     if (this.ctx && this.ctx.state !== 'closed') {
       this.ctx.close().catch(() => {});
     }
@@ -536,9 +548,6 @@ function getSampleScriptData() {
 window.addEventListener('DOMContentLoaded', () => {
   injectToolbarEnhancements();
   loadSavedOrgLogo();
-  if ('speechSynthesis' in window) {
-    window.speechSynthesis.getVoices();
-  }
   loadSavedGithubSettings();
   populateSelectMenus();
 
@@ -658,7 +667,6 @@ function applyScriptToState(scriptObj, isInitial = false) {
     };
   });
 
-  // 자동으로 맨 앞에 표지(1컷) 추가 및 마지막 컷 하단 로고 활성화 -> 총 11컷 구성
   appState.cuts = ensureCoverAndEndLogo(parsedCuts, epTitle);
   appState.currentCutIndex = 0;
   appState.selectedLayerIndex = -1;
@@ -725,7 +733,6 @@ function handleBatchSceneUpload(e) {
   let loadedCount = 0;
   const timestamp = Date.now();
 
-  // 표지 컷을 제외한 본문 컷들의 인덱스 목록 추출
   const bodyCutIndices = appState.cuts
     .map((c, idx) => (!c.isCover ? idx : -1))
     .filter(idx => idx !== -1);
@@ -739,7 +746,6 @@ function handleBatchSceneUpload(e) {
         loadedImages[assetKey] = img;
         DEFAULT_ASSETS.backgrounds.push({ id: assetKey, label: `✨ AI장면 #${index + 1} (${file.name})` });
 
-        // 1번 그림을 표지 배경으로도 자동 연결(불투명 흐림 효과 유지)
         if (index === 0 && appState.cuts[0]?.isCover) {
           appState.cuts[0].background = assetKey;
         }
@@ -834,7 +840,6 @@ function drawBackgroundAndMood(c, cut, zoomScale = 1.0) {
   }
   c.restore();
 
-  // 표지일 경우 제목과 로고가 선명하게 보이도록 반투명 불투명 막(Translucent Frosted Overlay) 적용
   if (cut.isCover) {
     c.save();
     const coverOverlay = c.createLinearGradient(0, 0, 0, CANVAS_H);
@@ -844,7 +849,6 @@ function drawBackgroundAndMood(c, cut, zoomScale = 1.0) {
     c.fillStyle = coverOverlay;
     c.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-    // 세련된 표지 외곽 프레임 라인
     c.strokeStyle = 'rgba(255, 255, 255, 0.25)';
     c.lineWidth = 4;
     c.strokeRect(48, 48, CANVAS_W - 96, CANVAS_H - 96);
@@ -893,13 +897,11 @@ function drawBuiltinBackground(c, bgId, isCover = false) {
   c.fillRect(0, 0, CANVAS_W, CANVAS_H);
 }
 
-// 표지 전용 렌더링 (지원단 로고 + 중앙 대형 제목 + 부제목)
 function drawCoverLayout(c, cut, alpha = 1.0) {
   if (alpha <= 0) return;
   c.save();
   c.globalAlpha = alpha;
 
-  // 1. 상단 지원단 로고 영역 (Y: 250 부근)
   const logoCenterY = 290;
   if (orgLogoImage) {
     const maxW = 460;
@@ -908,7 +910,6 @@ function drawCoverLayout(c, cut, alpha = 1.0) {
     const drawW = orgLogoImage.width * ratio;
     const drawH = orgLogoImage.height * ratio;
 
-    // 로고가 어두운 배경에서도 선명히 보이도록 은은한 흰색 반투명 캡슐 배경
     c.fillStyle = 'rgba(255, 255, 255, 0.92)';
     c.beginPath();
     c.roundRect(CANVAS_W / 2 - (drawW + 64) / 2, logoCenterY - (drawH + 36) / 2, drawW + 64, drawH + 36, 24);
@@ -916,7 +917,6 @@ function drawCoverLayout(c, cut, alpha = 1.0) {
 
     c.drawImage(orgLogoImage, CANVAS_W / 2 - drawW / 2, logoCenterY - drawH / 2, drawW, drawH);
   } else {
-    // 로고 미등록 시 기본 기관명 배지
     c.fillStyle = 'rgba(255, 255, 255, 0.92)';
     c.beginPath();
     c.roundRect(CANVAS_W / 2 - 280, logoCenterY - 40, 560, 80, 40);
@@ -928,7 +928,6 @@ function drawCoverLayout(c, cut, alpha = 1.0) {
     c.fillText(`🏛️ ${ORG_NAME_DEFAULT}`, CANVAS_W / 2, logoCenterY + 2);
   }
 
-  // 2. 중앙 메인 제목 (headerText)
   const mainTitle = (cut.headerText || formatEpisodeDisplayTitle(appState.episodeTitle)).trim();
   const titleLines = mainTitle.split('\n');
   const titleFontSize = Math.max(54, Number(cut.captionSize) || 68);
@@ -950,7 +949,6 @@ function drawCoverLayout(c, cut, alpha = 1.0) {
     c.fillText(line, CANVAS_W / 2, y);
   });
 
-  // 3. 장식 구분선
   const dividerY = titleStartY + totalTitleH + 30;
   c.strokeStyle = '#38bdf8';
   c.lineWidth = 6;
@@ -959,7 +957,6 @@ function drawCoverLayout(c, cut, alpha = 1.0) {
   c.lineTo(CANVAS_W / 2 + 120, dividerY);
   c.stroke();
 
-  // 4. 하단 부제목 / 안내 문구 (footerText)
   const subTitle = (cut.footerText || '').trim();
   if (subTitle) {
     c.font = '700 36px "Noto Sans KR", sans-serif';
@@ -972,7 +969,6 @@ function drawCoverLayout(c, cut, alpha = 1.0) {
     });
   }
 
-  // 5. 하단 슬라이드/시청 유도 안내
   c.fillStyle = 'rgba(255, 255, 255, 0.16)';
   c.beginPath();
   c.roundRect(CANVAS_W / 2 - 190, CANVAS_H - 165, 380, 56, 28);
@@ -986,7 +982,6 @@ function drawCoverLayout(c, cut, alpha = 1.0) {
   c.restore();
 }
 
-// 마지막 컷 하단 지원단 로고 배치 (하단 자막이 있으면 그 바로 위에 깔끔하게 배치)
 function drawBottomOrgLogo(c, cut, alpha = 1.0) {
   if (!cut.showBottomLogo || alpha <= 0) return;
   const hasFooter = Boolean((cut.footerText || '').trim());
@@ -1082,7 +1077,6 @@ function drawStoryCaptions(c, cut, cutNumber, totalCuts, alpha = 1.0) {
     if (footerText) drawCaptionBlock(c, footerText, CANVAS_H - 40, 'bottom', style, fontSize);
   }
 
-  // 본문 페이지 번호 표시 (표지 제외 기준 또는 전체 기준)
   const hasCover = appState.cuts[0]?.isCover;
   const badgeText = hasCover ? `${cutNumber - 1}/${totalCuts - 1}` : `${cutNumber}/${totalCuts}`;
   c.font = '700 22px "Noto Sans KR", sans-serif';
@@ -1445,9 +1439,6 @@ function stopAllPreviewMedia() {
     activeAudioCtx.stop();
     activeAudioCtx = null;
   }
-  if ('speechSynthesis' in window) {
-    window.speechSynthesis.cancel();
-  }
 }
 
 function previewCurrentCutAnimation() {
@@ -1461,20 +1452,19 @@ function previewCurrentCutAnimation() {
   const startTime = performance.now();
   const triggeredSet = new Set();
 
-  const audioEngine = new WebtoonAudioEngine();
+  const audioEngine = new WebtoonAudioEngine(appState.cuts, appState.episodeTitle);
+  audioEngine.updateCutMood(cut, cutIndex, appState.cuts.length);
   activeAudioCtx = audioEngine;
   if (appState.audioOptions.enableBgm) {
-    audioEngine.startGentleBgm();
+    audioEngine.startScenarioBgm();
   }
 
   function step(now) {
     const elapsedSec = (now - startTime) / 1000;
     if (elapsedSec <= spec.totalDuration) {
-      renderAnimatedCutFrame(ctx, cutIndex, elapsedSec, spec, (item, curCut) => {
-        if (appState.audioOptions.enableVoice && (item.type || '').toLowerCase() === 'bubble') {
-          const role = detectBubbleSpeakerRole(item, curCut);
-          audioEngine.playCharacterDialogueVoice(item.text, role);
-          speakBubbleTextTTS(item.text, role);
+      renderAnimatedCutFrame(ctx, cutIndex, elapsedSec, spec, (item) => {
+        if (appState.audioOptions.enablePopSfx && (item.type || '').toLowerCase() === 'bubble') {
+          audioEngine.playBubblePopSound(item.bubbleStyle);
         }
       }, triggeredSet);
       previewAnimId = requestAnimationFrame(step);
@@ -1755,7 +1745,6 @@ function syncInspectorWithSelection() {
   document.getElementById('captionStyleSelect').value = cut.captionStyle || 'outline';
   document.getElementById('captionSizeInput').value = cut.captionSize || (cut.isCover ? 68 : 46);
 
-  // 표지일 때 안내 라벨 변경
   const headerLabel = document.getElementById('headerLabelText');
   const footerLabel = document.getElementById('footerLabelText');
   if (headerLabel) headerLabel.textContent = cut.isCover ? '📕 표지 대제목 (중앙 배치)' : '상단 사연 자막 (흰 글씨 + 검은 외곽선)';
@@ -1790,8 +1779,7 @@ function syncInspectorWithSelection() {
 
   const type = (item.type || '').toLowerCase();
   if (type === 'bubble') {
-    const role = detectBubbleSpeakerRole(item, cut);
-    badge.textContent = role === 'doctor' ? '🐯 호랑이 박사 톤' : '🐰 토끼 시민 톤';
+    badge.textContent = '💬 말풍선 (노란 점=꼬리)';
     bubbleInsp.classList.remove('hidden');
     document.getElementById('speakerInput').value = item.speaker || '';
     document.getElementById('dialogueTextarea').value = item.text || '';
@@ -1816,7 +1804,6 @@ function bindUIEvents() {
   document.getElementById('batchSceneInput').addEventListener('change', handleBatchSceneUpload);
   document.getElementById('localAssetInput').addEventListener('change', handleLocalAssetUpload);
 
-  // 상단 제목/파일명 입력 시 표지 제목도 실시간 동기화
   document.getElementById('episodeTitleInput').addEventListener('input', (e) => {
     appState.episodeTitle = e.target.value;
     if (appState.cuts[0]?.isCover) {
@@ -2282,7 +2269,7 @@ async function downloadReelsMp4() {
   const exportCtx = exportCanvas.getContext('2d');
   const fps = 30;
 
-  const hasAudio = appState.audioOptions.enableBgm || appState.audioOptions.enableVoice;
+  const hasAudio = appState.audioOptions.enableBgm || appState.audioOptions.enablePopSfx;
 
   try {
     if (hasAudio) {
@@ -2365,10 +2352,10 @@ async function recordVideoWithAudio(exportCanvas, exportCtx, fps, epName, loadin
   const combinedTracks = [...videoStream.getVideoTracks()];
 
   let audioEngine = null;
-  if (!forceMute && (appState.audioOptions.enableBgm || appState.audioOptions.enableVoice)) {
-    audioEngine = new WebtoonAudioEngine();
+  if (!forceMute && (appState.audioOptions.enableBgm || appState.audioOptions.enablePopSfx)) {
+    audioEngine = new WebtoonAudioEngine(appState.cuts, appState.episodeTitle);
     if (appState.audioOptions.enableBgm) {
-      audioEngine.startGentleBgm();
+      audioEngine.startScenarioBgm();
     }
     const audioTracks = audioEngine.getAudioStream().getAudioTracks();
     combinedTracks.push(...audioTracks);
@@ -2393,6 +2380,9 @@ async function recordVideoWithAudio(exportCanvas, exportCtx, fps, epName, loadin
   try {
     for (let i = 0; i < appState.cuts.length; i++) {
       const cut = appState.cuts[i];
+      if (audioEngine) {
+        audioEngine.updateCutMood(cut, i, appState.cuts.length);
+      }
       const spec = getCutAnimationSpec(cut);
       const startMs = performance.now();
       const triggeredSet = new Set();
@@ -2401,12 +2391,10 @@ async function recordVideoWithAudio(exportCanvas, exportCtx, fps, epName, loadin
         const elapsedSec = (performance.now() - startMs) / 1000;
         if (elapsedSec > spec.totalDuration) break;
 
-        loadingText.textContent = `🎬 표지·BGM·목소리 합성 녹화 중... (${i + 1} / ${appState.cuts.length}장)`;
-        renderAnimatedCutFrame(exportCtx, i, elapsedSec, spec, (item, curCut) => {
-          if (audioEngine && appState.audioOptions.enableVoice && (item.type || '').toLowerCase() === 'bubble') {
-            const role = detectBubbleSpeakerRole(item, curCut);
-            audioEngine.playCharacterDialogueVoice(item.text, role);
-            speakBubbleTextTTS(item.text, role);
+        loadingText.textContent = `🎬 표지·맞춤BGM·팝업음 합성 중... (${i + 1} / ${appState.cuts.length}장)`;
+        renderAnimatedCutFrame(exportCtx, i, elapsedSec, spec, (item) => {
+          if (audioEngine && appState.audioOptions.enablePopSfx && (item.type || '').toLowerCase() === 'bubble') {
+            audioEngine.playBubblePopSound(item.bubbleStyle);
           }
         }, triggeredSet);
 
