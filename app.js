@@ -2,7 +2,8 @@
  * 인스타그램 웹툰 & 릴스 자동 제작기
  * - 자동 표지(1컷) + 본문(2~11컷) 총 11장 구성
  * - 표지 불투명 오버레이 & 경상남도 감염병관리지원단 로고(표지 + 마지막 컷 하단) 자동 배치
- * - 시나리오 분위기 자동 감지 BGM + 말풍선 팝업 '뿅!' 효과음 MP4 인코딩 + 실행취소(Undo) 포함
+ * - 시나리오 분위기 자동 감지 BGM + 말풍선 팝업 '뿅!' 효과음
+ * - 4종 몰입형 모션(컷 전환 크로스페이드, 말풍선 미세 부유, 위기 컷 미세 흔들림, 자막 슬라이드업) + 실행취소(Undo) 포함
  */
 
 const CANVAS_W = 1080;
@@ -326,14 +327,13 @@ function analyzeScenarioMood(cuts, episodeTitle) {
     ...cuts.map(c => `${c.headerText || ''} ${c.footerText || ''} ${(c.items || []).map(i => i.text || '').join(' ')}`)
   ].join(' ');
 
-  // 키워드 기반 전체 에피소드 톤 자동 판별
   if (/테러|경보|응급|치명|중증|비상|위험|사망|확산/.test(fullText)) {
-    return 'alert'; // 차분하고 진중한 긴장 톤
+    return 'alert';
   }
   if (/손씻기|비누|청결|기침|마스크|예방|방역|체크|완벽/.test(fullText)) {
-    return 'bright'; // 맑고 경쾌한 피아노 톤
+    return 'bright';
   }
-  return 'warm'; // 따뜻하고 포근한 일상·산책 오르골 톤
+  return 'warm';
 }
 
 class WebtoonAudioEngine {
@@ -349,14 +349,13 @@ class WebtoonAudioEngine {
     this.isStopped = false;
     this.bgmTimer = null;
     this.baseTheme = analyzeScenarioMood(cuts, episodeTitle);
-    this.currentCutMood = 'normal'; // 'normal' | 'tense' | 'resolve'
+    this.currentCutMood = 'normal';
   }
 
   getAudioStream() {
     return this.dest.stream;
   }
 
-  // 현재 재생 중인 컷의 시각 효과(darkMood, speedLines) 및 대사 키워드를 읽어 실시간 분위기 전환
   updateCutMood(cut, cutIndex, totalCuts) {
     if (!cut) return;
     if (cut.isCover) {
@@ -367,7 +366,7 @@ class WebtoonAudioEngine {
     if (cut.darkMood || cut.speedLines || /으악|위험|불청객|안 보여|스톱|잠깐|침투|비말/.test(cutText)) {
       this.currentCutMood = 'tense';
     } else if (cutIndex >= Math.floor(totalCuts * 0.6)) {
-      this.currentCutMood = 'resolve'; // 후반부 해결·실천 구간
+      this.currentCutMood = 'resolve';
     } else {
       this.currentCutMood = 'normal';
     }
@@ -376,39 +375,36 @@ class WebtoonAudioEngine {
   startScenarioBgm() {
     if (this.isStopped) return;
 
-    // 테마별 코드 진행 (Hz)
     const chordPalettes = {
       warm: [
-        [261.63, 329.63, 392.00, 493.88], // Cmaj7
-        [220.00, 261.63, 329.63, 392.00], // Am7
-        [174.61, 220.00, 261.63, 329.63], // Fmaj7
-        [196.00, 246.94, 293.66, 392.00]  // G6
+        [261.63, 329.63, 392.00, 493.88],
+        [220.00, 261.63, 329.63, 392.00],
+        [174.61, 220.00, 261.63, 329.63],
+        [196.00, 246.94, 293.66, 392.00]
       ],
       bright: [
-        [293.66, 369.99, 440.00, 554.37], // Dmaj7 (밝고 상쾌함)
-        [246.94, 293.66, 369.99, 440.00], // Bm7
-        [196.00, 246.94, 293.66, 369.99], // Gmaj7
-        [220.00, 277.18, 329.63, 440.00]  // A6
+        [293.66, 369.99, 440.00, 554.37],
+        [246.94, 293.66, 369.99, 440.00],
+        [196.00, 246.94, 293.66, 369.99],
+        [220.00, 277.18, 329.63, 440.00]
       ],
       alert: [
-        [220.00, 261.63, 329.63, 392.00], // Am7 (차분한 경각심)
-        [174.61, 220.00, 261.63, 329.63], // Fmaj7
-        [164.81, 196.00, 246.94, 329.63], // Em7
-        [220.00, 261.63, 329.63, 440.00]  // Am
+        [220.00, 261.63, 329.63, 392.00],
+        [174.61, 220.00, 261.63, 329.63],
+        [164.81, 196.00, 246.94, 329.63],
+        [220.00, 261.63, 329.63, 440.00]
       ],
       tense: [
-        // 위기/실수 컷에서 실시간 전환되는 긴장감 코드 (Dm7 - E7sus4)
-        [293.66, 349.23, 440.00, 523.25], // Dm7
-        [246.94, 329.63, 392.00, 493.88], // Em7
-        [220.00, 261.63, 329.63, 415.30], // Am(maj7)
-        [164.81, 246.94, 329.63, 392.00]  // Em
+        [293.66, 349.23, 440.00, 523.25],
+        [246.94, 329.63, 392.00, 493.88],
+        [220.00, 261.63, 329.63, 415.30],
+        [164.81, 246.94, 329.63, 392.00]
       ],
       resolve: [
-        // 후반부 해결/실천 컷에서 전환되는 희망차고 밝은 코드
-        [261.63, 329.63, 392.00, 523.25], // C
-        [196.00, 246.94, 293.66, 392.00], // G
-        [220.00, 261.63, 329.63, 440.00], // Am
-        [174.61, 220.00, 261.63, 349.23]  // F
+        [261.63, 329.63, 392.00, 523.25],
+        [196.00, 246.94, 293.66, 392.00],
+        [220.00, 261.63, 329.63, 440.00],
+        [174.61, 220.00, 261.63, 349.23]
       ]
     };
 
@@ -418,7 +414,6 @@ class WebtoonAudioEngine {
       if (this.isStopped) return;
       const now = this.ctx.currentTime;
 
-      // 현재 컷 분위기가 위기(tense)나 해결(resolve)이면 우선 적용, 아니면 에피소드 기본 테마 적용
       const activeKey = (this.currentCutMood === 'tense' || this.currentCutMood === 'resolve')
         ? this.currentCutMood
         : this.baseTheme;
@@ -442,7 +437,6 @@ class WebtoonAudioEngine {
       osc.start(now);
       osc.stop(now + 1.1);
 
-      // 마디 첫 박자 저음 베이스
       if (noteIdx === 0) {
         const bassOsc = this.ctx.createOscillator();
         const bassGain = this.ctx.createGain();
@@ -465,7 +459,6 @@ class WebtoonAudioEngine {
     playNote();
   }
 
-  // 말풍선 등장 시 작고 경쾌한 물방울 '뿅!' 효과음
   playBubblePopSound(bubbleStyle = 'round') {
     if (this.isStopped) return;
     const now = this.ctx.currentTime;
@@ -474,11 +467,9 @@ class WebtoonAudioEngine {
 
     osc.type = 'sine';
     if (bubbleStyle === 'sfx' || bubbleStyle === 'shout') {
-      // 강조/외침 말풍선일 때는 조금 더 경쾌한 2단 팝업음
       osc.frequency.setValueAtTime(520, now);
       osc.frequency.exponentialRampToValueAtTime(980, now + 0.09);
     } else {
-      // 일반 대화 말풍선일 때는 부드러운 물방울 팝업음
       osc.frequency.setValueAtTime(440, now);
       osc.frequency.exponentialRampToValueAtTime(760, now + 0.08);
     }
@@ -897,10 +888,11 @@ function drawBuiltinBackground(c, bgId, isCover = false) {
   c.fillRect(0, 0, CANVAS_W, CANVAS_H);
 }
 
-function drawCoverLayout(c, cut, alpha = 1.0) {
+function drawCoverLayout(c, cut, alpha = 1.0, slideOffsetY = 0) {
   if (alpha <= 0) return;
   c.save();
   c.globalAlpha = alpha;
+  c.translate(0, slideOffsetY);
 
   const logoCenterY = 290;
   if (orgLogoImage) {
@@ -1055,7 +1047,8 @@ function drawSpeedLines(c) {
   c.restore();
 }
 
-function drawStoryCaptions(c, cut, cutNumber, totalCuts, alpha = 1.0) {
+// 자막 슬라이드 업 오프셋(slideOffsetY) 지원
+function drawStoryCaptions(c, cut, cutNumber, totalCuts, alpha = 1.0, slideOffsetY = 0) {
   if (alpha <= 0 || cut.isCover) return;
   const style = cut.captionStyle || 'outline';
   const fontSize = cut.captionSize || 46;
@@ -1073,8 +1066,8 @@ function drawStoryCaptions(c, cut, cutNumber, totalCuts, alpha = 1.0) {
     c.textAlign = 'left';
     c.fillText(headerText.replace(/\n/g, ' '), 36, 46);
   } else {
-    if (headerText) drawCaptionBlock(c, headerText, 40, 'top', style, fontSize);
-    if (footerText) drawCaptionBlock(c, footerText, CANVAS_H - 40, 'bottom', style, fontSize);
+    if (headerText) drawCaptionBlock(c, headerText, 40 + slideOffsetY, 'top', style, fontSize);
+    if (footerText) drawCaptionBlock(c, footerText, CANVAS_H - 40 + slideOffsetY * 0.6, 'bottom', style, fontSize);
   }
 
   const hasCover = appState.cuts[0]?.isCover;
@@ -1134,8 +1127,9 @@ function drawStickerLayer(c, item, animState = null) {
   c.save();
   if (animState) c.globalAlpha = animState.alpha;
   const scale = animState ? animState.scale : 1.0;
+  const floatY = animState?.floatY || 0;
 
-  c.translate(x + width / 2, y + height / 2);
+  c.translate(x + width / 2, y + height / 2 + floatY);
   c.scale(flipX ? -scale : scale, scale);
   c.translate(-width / 2, -height / 2);
   if (loadedImages[stickerId]) {
@@ -1153,7 +1147,7 @@ function drawBubbleLayer(c, item, animState = null) {
   if (animState && animState.alpha <= 0) return;
 
   const {
-    x, y, width, height,
+    x, width, height,
     text = '',
     speaker = '',
     bubbleStyle = 'round',
@@ -1162,6 +1156,10 @@ function drawBubbleLayer(c, item, animState = null) {
     textColor = '#111827',
     bgColor = '#ffffff'
   } = item;
+
+  // 미세 부유(Floating) 오프셋 반영 (꼬리 끝점은 화자를 계속 가리키도록 본체만 살짝 부유)
+  const floatY = animState?.floatY || 0;
+  const y = item.y + floatY;
 
   if (typeof item.tailX !== 'number' || typeof item.tailY !== 'number') {
     const pt = getDefaultTailPoint(item);
@@ -1333,7 +1331,7 @@ function renderCutToContext(targetCtx, cutIndex, showSelection = false) {
   drawBackgroundAndMood(targetCtx, cut, 1.0);
 
   if (cut.isCover) {
-    drawCoverLayout(targetCtx, cut, 1.0);
+    drawCoverLayout(targetCtx, cut, 1.0, 0);
   } else {
     (cut.items || []).forEach((item, idx) => {
       const t = (item.type || '').toLowerCase();
@@ -1345,14 +1343,23 @@ function renderCutToContext(targetCtx, cutIndex, showSelection = false) {
       }
     });
 
-    drawStoryCaptions(targetCtx, cut, cutIndex + 1, appState.cuts.length, 1.0);
+    drawStoryCaptions(targetCtx, cut, cutIndex + 1, appState.cuts.length, 1.0, 0);
     drawBottomOrgLogo(targetCtx, cut, 1.0);
   }
 }
 
+// ============================================================================
+// 5. 4종 몰입형 모션(크로스페이드 + 말풍선 부유 + 위기 흔들림 + 자막 슬라이드업)
+// ============================================================================
+function isTenseCut(cut) {
+  if (!cut || cut.isCover) return false;
+  const cutText = `${cut.headerText || ''} ${(cut.items || []).map(i => i.text || '').join(' ')}`;
+  return Boolean(cut.speedLines || /으악|위험|불청객|안 보여|스톱|잠깐|침투|비말/.test(cutText));
+}
+
 function getCutAnimationSpec(cut) {
   if (cut.isCover) {
-    return { orderMap: {}, introDelay: 0.2, stepInterval: 0.5, popDuration: 0.3, totalDuration: 2.3 };
+    return { orderMap: {}, introDelay: 0.2, stepInterval: 0.5, popDuration: 0.3, totalDuration: 2.3, tense: false };
   }
 
   const items = cut.items || [];
@@ -1377,7 +1384,7 @@ function getCutAnimationSpec(cut) {
   const lastBubbleTime = items.length > 0 ? introDelay + (items.length - 1) * stepInterval + popDuration : introDelay;
   const totalDuration = lastBubbleTime + readingHold;
 
-  return { orderMap, introDelay, stepInterval, popDuration, totalDuration };
+  return { orderMap, introDelay, stepInterval, popDuration, totalDuration, tense: isTenseCut(cut) };
 }
 
 function easeOutBack(x) {
@@ -1386,48 +1393,97 @@ function easeOutBack(x) {
   return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
 }
 
-function renderAnimatedCutFrame(targetCtx, cutIndex, elapsedSec, spec, onItemAppearCallback = null, triggeredSet = null) {
+function easeOutCubic(x) {
+  return 1 - Math.pow(1 - x, 3);
+}
+
+function renderAnimatedCutFrame(
+  targetCtx,
+  cutIndex,
+  elapsedSec,
+  spec,
+  onItemAppearCallback = null,
+  triggeredSet = null,
+  prevSnapshotCanvas = null
+) {
   const cut = appState.cuts[cutIndex];
   if (!cut) return;
   targetCtx.clearRect(0, 0, CANVAS_W, CANVAS_H);
 
+  // [효과 3] 위기·강조 컷 미세 카메라 흔들림 (첫 말풍선 등장 순간 0.22초간 작동)
+  let shakeX = 0;
+  let shakeY = 0;
+  if (spec.tense && elapsedSec >= spec.introDelay && elapsedSec <= spec.introDelay + 0.22) {
+    const shakeProgress = (elapsedSec - spec.introDelay) / 0.22;
+    const decay = 1 - shakeProgress;
+    shakeX = Math.sin(shakeProgress * Math.PI * 6) * 7 * decay;
+    shakeY = Math.cos(shakeProgress * Math.PI * 5) * 4 * decay;
+  }
+
+  targetCtx.save();
+  if (shakeX !== 0 || shakeY !== 0) {
+    targetCtx.translate(shakeX, shakeY);
+  }
+
+  // 배경 부드러운 줌인 (Ken Burns)
   const progress = Math.min(1, Math.max(0, elapsedSec / spec.totalDuration));
   const zoomScale = 1.0 + progress * 0.035;
   drawBackgroundAndMood(targetCtx, cut, zoomScale);
 
+  // [효과 4] 자막 아래에서 위로 스르륵(Slide-up Fade) 등장
+  const captionT = Math.min(1, elapsedSec / 0.32);
+  const captionEase = easeOutCubic(captionT);
+  const captionAlpha = captionEase;
+  const captionSlideY = (1 - captionEase) * 16;
+
   if (cut.isCover) {
-    const coverAlpha = Math.min(1, elapsedSec / 0.35);
-    drawCoverLayout(targetCtx, cut, coverAlpha);
-    return;
+    drawCoverLayout(targetCtx, cut, captionAlpha, captionSlideY);
+  } else {
+    (cut.items || []).forEach((item, idx) => {
+      const seqOrder = spec.orderMap[idx] ?? idx;
+      const appearTime = spec.introDelay + seqOrder * spec.stepInterval;
+      const localT = (elapsedSec - appearTime) / spec.popDuration;
+
+      if (localT <= 0) return;
+
+      if (onItemAppearCallback && triggeredSet && !triggeredSet.has(idx)) {
+        triggeredSet.add(idx);
+        onItemAppearCallback(item, cut);
+      }
+
+      let alpha = 1.0;
+      let scale = 1.0;
+      let floatY = 0;
+
+      if (localT < 1.0) {
+        alpha = Math.min(1, localT * 1.8);
+        scale = 0.65 + 0.35 * easeOutBack(localT);
+      } else {
+        // [효과 2] 말풍선 등장 후 살아 숨 쉬는 미세 부유(Floating ±4px)
+        const postAppearSec = elapsedSec - (appearTime + spec.popDuration);
+        floatY = Math.sin(postAppearSec * 2.6 + idx) * 4.0;
+      }
+
+      const t = (item.type || '').toLowerCase();
+      if (t === 'bubble') drawBubbleLayer(targetCtx, item, { alpha, scale, floatY });
+      else if (t === 'sticker') drawStickerLayer(targetCtx, item, { alpha, scale, floatY });
+    });
+
+    drawStoryCaptions(targetCtx, cut, cutIndex + 1, appState.cuts.length, captionAlpha, captionSlideY);
+    drawBottomOrgLogo(targetCtx, cut, captionAlpha);
   }
 
-  (cut.items || []).forEach((item, idx) => {
-    const seqOrder = spec.orderMap[idx] ?? idx;
-    const appearTime = spec.introDelay + seqOrder * spec.stepInterval;
-    const localT = (elapsedSec - appearTime) / spec.popDuration;
+  targetCtx.restore();
 
-    if (localT <= 0) return;
-
-    if (onItemAppearCallback && triggeredSet && !triggeredSet.has(idx)) {
-      triggeredSet.add(idx);
-      onItemAppearCallback(item, cut);
-    }
-
-    let alpha = 1.0;
-    let scale = 1.0;
-    if (localT < 1.0) {
-      alpha = Math.min(1, localT * 1.8);
-      scale = 0.65 + 0.35 * easeOutBack(localT);
-    }
-
-    const t = (item.type || '').toLowerCase();
-    if (t === 'bubble') drawBubbleLayer(targetCtx, item, { alpha, scale });
-    else if (t === 'sticker') drawStickerLayer(targetCtx, item, { alpha, scale });
-  });
-
-  const captionAlpha = Math.min(1, elapsedSec / 0.25);
-  drawStoryCaptions(targetCtx, cut, cutIndex + 1, appState.cuts.length, captionAlpha);
-  drawBottomOrgLogo(targetCtx, cut, captionAlpha);
+  // [효과 1] 이전 컷에서 현재 컷으로 넘어갈 때 0.28초간 부드러운 크로스페이드 + 미세 슬라이드 전환
+  const transitionDur = 0.28;
+  if (prevSnapshotCanvas && elapsedSec < transitionDur) {
+    const trProgress = easeOutCubic(elapsedSec / transitionDur);
+    targetCtx.save();
+    targetCtx.globalAlpha = 1 - trProgress;
+    targetCtx.drawImage(prevSnapshotCanvas, -trProgress * 28, 0, CANVAS_W, CANVAS_H);
+    targetCtx.restore();
+  }
 }
 
 function stopAllPreviewMedia() {
@@ -1452,6 +1508,15 @@ function previewCurrentCutAnimation() {
   const startTime = performance.now();
   const triggeredSet = new Set();
 
+  // 이전 컷이 존재하면 미리보기에서도 크로스페이드 전환 효과 시연
+  let prevSnapshot = null;
+  if (cutIndex > 0) {
+    prevSnapshot = document.createElement('canvas');
+    prevSnapshot.width = CANVAS_W;
+    prevSnapshot.height = CANVAS_H;
+    renderCutToContext(prevSnapshot.getContext('2d'), cutIndex - 1, false);
+  }
+
   const audioEngine = new WebtoonAudioEngine(appState.cuts, appState.episodeTitle);
   audioEngine.updateCutMood(cut, cutIndex, appState.cuts.length);
   activeAudioCtx = audioEngine;
@@ -1466,7 +1531,7 @@ function previewCurrentCutAnimation() {
         if (appState.audioOptions.enablePopSfx && (item.type || '').toLowerCase() === 'bubble') {
           audioEngine.playBubblePopSound(item.bubbleStyle);
         }
-      }, triggeredSet);
+      }, triggeredSet, prevSnapshot);
       previewAnimId = requestAnimationFrame(step);
     } else {
       stopAllPreviewMedia();
@@ -2302,6 +2367,10 @@ async function downloadReelsMp4() {
         encoder.configure({ codec: chosenCodec, width: CANVAS_W, height: CANVAS_H, bitrate: 5_000_000, framerate: fps });
 
         let globalFrameIndex = 0;
+        const prevSnapshot = document.createElement('canvas');
+        prevSnapshot.width = CANVAS_W;
+        prevSnapshot.height = CANVAS_H;
+
         for (let i = 0; i < appState.cuts.length; i++) {
           const cut = appState.cuts[i];
           const spec = getCutAnimationSpec(cut);
@@ -2309,11 +2378,11 @@ async function downloadReelsMp4() {
 
           for (let f = 0; f < totalCutFrames; f++) {
             if (f % 10 === 0) {
-              loadingText.textContent = `🎬 릴스 MP4 렌더링 중... (${i + 1} / ${appState.cuts.length}컷)`;
+              loadingText.textContent = `🎬 릴스 MP4 렌더링 중... (${i + 1} / ${appState.cuts.length}장)`;
               await new Promise(r => setTimeout(r, 0));
             }
             const elapsedSec = f / fps;
-            renderAnimatedCutFrame(exportCtx, i, elapsedSec, spec);
+            renderAnimatedCutFrame(exportCtx, i, elapsedSec, spec, null, null, i > 0 ? prevSnapshot : null);
 
             const timestampUs = Math.round((globalFrameIndex / fps) * 1_000_000);
             const durationUs = Math.round((1 / fps) * 1_000_000);
@@ -2322,6 +2391,9 @@ async function downloadReelsMp4() {
             frame.close();
             globalFrameIndex++;
           }
+
+          // 현재 컷의 마지막 프레임을 다음 컷 크로스페이드 전환용 스냅샷으로 저장
+          prevSnapshot.getContext('2d').drawImage(exportCanvas, 0, 0);
         }
 
         loadingText.textContent = 'MP4 파일 마무리 중...';
@@ -2377,6 +2449,10 @@ async function recordVideoWithAudio(exportCanvas, exportCtx, fps, epName, loadin
   const stopPromise = new Promise(resolve => { recorder.onstop = resolve; });
   recorder.start();
 
+  const prevSnapshot = document.createElement('canvas');
+  prevSnapshot.width = CANVAS_W;
+  prevSnapshot.height = CANVAS_H;
+
   try {
     for (let i = 0; i < appState.cuts.length; i++) {
       const cut = appState.cuts[i];
@@ -2391,15 +2467,25 @@ async function recordVideoWithAudio(exportCanvas, exportCtx, fps, epName, loadin
         const elapsedSec = (performance.now() - startMs) / 1000;
         if (elapsedSec > spec.totalDuration) break;
 
-        loadingText.textContent = `🎬 표지·맞춤BGM·팝업음 합성 중... (${i + 1} / ${appState.cuts.length}장)`;
-        renderAnimatedCutFrame(exportCtx, i, elapsedSec, spec, (item) => {
-          if (audioEngine && appState.audioOptions.enablePopSfx && (item.type || '').toLowerCase() === 'bubble') {
-            audioEngine.playBubblePopSound(item.bubbleStyle);
-          }
-        }, triggeredSet);
+        loadingText.textContent = `🎬 표지·모션·맞춤BGM·팝업음 합성 중... (${i + 1} / ${appState.cuts.length}장)`;
+        renderAnimatedCutFrame(
+          exportCtx,
+          i,
+          elapsedSec,
+          spec,
+          (item) => {
+            if (audioEngine && appState.audioOptions.enablePopSfx && (item.type || '').toLowerCase() === 'bubble') {
+              audioEngine.playBubblePopSound(item.bubbleStyle);
+            }
+          },
+          triggeredSet,
+          i > 0 ? prevSnapshot : null
+        );
 
         await new Promise(r => requestAnimationFrame(r));
       }
+
+      prevSnapshot.getContext('2d').drawImage(exportCanvas, 0, 0);
     }
   } finally {
     recorder.stop();
